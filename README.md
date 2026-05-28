@@ -17,7 +17,7 @@ P2/P3 Factories (All Planets), P4 Factories (Barren/Temperate Planets)
 1. P0 -> P2 Mining Variant
 
 ### How to use these templates.
-1. Navigate to `/users/<user>/Documents/PlanetaryInteractionTemplates`
+1. Navigate to `/users/<user>/Documents/EVE/PlanetaryInteractionTemplates`
 2. Unzip and paste all json files in the folder above.
 3. Refresh your templates menu in game.
 
