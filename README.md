@@ -18,8 +18,9 @@ P2/P3 Factories (All Planets), P4 Factories (Barren/Temperate Planets)
 
 ### How to use these templates.
 1. Navigate to `/users/<user>/Documents/EVE/PlanetaryInteractionTemplates`
-2. Unzip and paste all json files in the folder above.
-3. Refresh your templates menu in game.
+   -  Onedrive: `/users/<user>/OneDrive/Documents/EVE/PlanetaryInteractionTemplates`
+3. Unzip and paste all json files in the folder above.
+4. Refresh your templates menu in game.
 
 ### Skill Recommendations
 | Skill Names | Miner | Factory |
