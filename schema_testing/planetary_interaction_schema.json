@@ -1,0 +1,127 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "EVE Online Planetary Interaction Template Schema",
+  "description": "Schema for validating EVE Online planetary interaction templates",
+  "type": "object",
+  "required": ["CmdCtrLv", "Cmt", "Diam", "L", "P", "Pln", "R"],
+  "properties": {
+    "CmdCtrLv": {
+      "type": "integer",
+      "description": "Command center level",
+      "minimum": 1,
+      "maximum": 6
+    },
+    "Cmt": {
+      "type": "string",
+      "description": "Comment describing the template"
+    },
+    "Diam": {
+      "type": "number",
+      "description": "Planet diameter"
+    },
+    "L": {
+      "type": "array",
+      "description": "Array of links between facilities",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["D", "Lv", "S"],
+        "properties": {
+          "D": {
+            "type": "integer",
+            "description": "Destination facility ID"
+          },
+          "Lv": {
+            "type": "integer",
+            "description": "Link level",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "S": {
+            "type": "integer",
+            "description": "Source facility ID"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "P": {
+      "type": "array",
+      "description": "Array of pin positions on the planet",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["H", "La", "Lo", "T"],
+        "properties": {
+          "H": {
+            "type": "integer",
+            "description": "Height/elevation",
+            "minimum": 0,
+            "maximum": 20
+          },
+          "La": {
+            "type": "number",
+            "description": "Latitude coordinate",
+            "minimum": 0.0,
+            "maximum": 3.14159
+          },
+          "Lo": {
+            "type": "number",
+            "description": "Longitude coordinate",
+            "minimum": 0.0,
+            "maximum": 6.28318
+          },
+                     "S": {
+             "oneOf": [
+               {
+                 "type": "integer",
+                 "description": "Structure ID (can be null for some pins)"
+               },
+               {
+                 "type": "null",
+                 "description": "Null value for pins without structures"
+               }
+             ]
+           },
+                     "T": {
+             "type": "integer",
+             "description": "Pin type ID"
+           }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Pln": {
+      "type": "integer",
+      "description": "Planet ID"
+    },
+    "R": {
+      "type": "array",
+      "description": "Array of routes between facilities",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["P", "Q", "T"],
+        "properties": {
+          "P": {
+            "type": "array",
+            "description": "Array of facility IDs in the route",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "Q": {
+            "type": "integer",
+            "description": "Quantity/amount"
+          },
+                     "T": {
+             "type": "integer",
+             "description": "Route type ID"
+           }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+} 
