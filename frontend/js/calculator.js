@@ -275,13 +275,224 @@ function copyJSON(){
   const tpl=cfg.mode==='mining'?buildMiningTemplate(cfg):buildFactoryTemplate(cfg);
   const json=serializeGame(tpl);
   const done=()=>{ const b=$id('btnCopy'); const old=b.textContent; b.textContent='Copied ✓'; setTimeout(()=>{ b.textContent=old; }, 1500); };
-  if(navigator.clipboard&&navigator.clipboard.writeText){
-    navigator.clipboard.writeText(json).then(done).catch(()=>fallback());
-  }else{
+  const fallback=()=>{
     const ta=document.createElement('textarea'); ta.value=json; document.body.appendChild(ta); ta.select();
     try{ document.execCommand('copy'); done(); }catch(e){ alert('Copy failed'); }
     ta.remove();
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(json).then(done).catch(()=>fallback());
+  }else{
+    fallback();
   }
+}
+
+/* ================= Persistence & Import ================= */
+const CALC_STATE_KEY='eve-pi-calculator-state';
+const THEME_KEY='eve-pi-theme';
+
+function setControlValue(id, value){
+  const el=$id(id);
+  if(!el || value===undefined || value===null) return;
+  if(el.type==='checkbox') el.checked=!!value;
+  else el.value=String(value);
+}
+
+function saveCalculatorState(){
+  const state={};
+  for(const id of bindIds){
+    const el=$id(id);
+    if(!el) continue;
+    state[id]=el.type==='checkbox'?el.checked:el.value;
+  }
+  localStorage.setItem(CALC_STATE_KEY, JSON.stringify(state));
+}
+
+function restoreCalculatorState(){
+  let state=null;
+  try{ state=JSON.parse(localStorage.getItem(CALC_STATE_KEY)||'null'); }catch(e){ state=null; }
+  if(!state || typeof state!=='object') return;
+  const deferred=new Set(['layoutSub','factoryProd','upgEcu','upgTrunk','upgOther']);
+  for(const id of bindIds){
+    if(!deferred.has(id)) setControlValue(id,state[id]);
+  }
+  populateLayoutSub();
+  setControlValue('layoutSub',state.layoutSub);
+  populateFactoryProd();
+  setControlValue('factoryProd',state.factoryProd);
+  const ver=getVersion();
+  for(const id of ['upgEcu','upgTrunk','upgOther']) syncUpgOptions(id, ver.levels.length-1);
+  setControlValue('upgEcu',state.upgEcu);
+  setControlValue('upgTrunk',state.upgTrunk);
+  setControlValue('upgOther',state.upgOther);
+}
+
+function restoreTheme(){
+  $id('themeToggle').checked=localStorage.getItem(THEME_KEY)==='dark';
+}
+
+function saveTheme(){
+  localStorage.setItem(THEME_KEY,$id('themeToggle').checked?'dark':'light');
+}
+
+function setJsonStatus(message, type){
+  const el=$id('jsonStatus');
+  el.className='validation-status'+(type?` ${type}`:'');
+  el.textContent=message;
+}
+
+function parseTemplateText(text){
+  const trimmed=(text||'').trim();
+  if(!trimmed) return {ok:false, errors:['No JSON provided.'], warnings:[]};
+  try{
+    const tpl=JSON.parse(trimmed);
+    return validateTemplate(tpl);
+  }catch(e){
+    return {ok:false, errors:[`Invalid JSON: ${e.message}`], warnings:[]};
+  }
+}
+
+function validateTemplate(tpl){
+  const errors=[], warnings=[];
+  if(!tpl || typeof tpl!=='object' || Array.isArray(tpl)) return {ok:false, errors:['Root value must be a JSON object.'], warnings:[]};
+  if(!Number.isInteger(tpl.CmdCtrLv) || tpl.CmdCtrLv<0 || tpl.CmdCtrLv>5) errors.push('CmdCtrLv must be an integer from 0 to 5.');
+  if(typeof tpl.Diam!=='number' || tpl.Diam<=0) errors.push('Diam must be a positive number.');
+  if(!Number.isInteger(tpl.Pln)) warnings.push('Pln is missing or not an integer; planet type cannot be inferred reliably.');
+  else if(!PLANETS[tpl.Pln]) warnings.push(`Unknown planet type Pln=${tpl.Pln}; radius and CCU can still be imported.`);
+  for(const key of ['P','L','R']) if(!Array.isArray(tpl[key])) errors.push(`${key} must be an array.`);
+  if(errors.length) return {ok:false, tpl, errors, warnings};
+  tpl.P.forEach((pin,i)=>{
+    if(!pin || typeof pin!=='object' || Array.isArray(pin)) errors.push(`P[${i}] must be an object.`);
+    else{
+      if(typeof pin.T!=='number') errors.push(`P[${i}].T must be a type id number.`);
+      if(typeof pin.La!=='number') errors.push(`P[${i}].La must be a number.`);
+      if(typeof pin.Lo!=='number') errors.push(`P[${i}].Lo must be a number.`);
+      if(pin.H!==undefined && typeof pin.H!=='number') errors.push(`P[${i}].H must be a number when present.`);
+      if(pin.S!==null && pin.S!==undefined && typeof pin.S!=='number') errors.push(`P[${i}].S must be null or a type id number.`);
+    }
+  });
+  const validPin=(n)=>Number.isInteger(n) && n>=1 && n<=tpl.P.length;
+  tpl.L.forEach((link,i)=>{
+    if(!link || typeof link!=='object' || Array.isArray(link)) errors.push(`L[${i}] must be an object.`);
+    else{
+      if(!validPin(link.S)) errors.push(`L[${i}].S must reference an existing pin.`);
+      if(!validPin(link.D)) errors.push(`L[${i}].D must reference an existing pin.`);
+      if(!Number.isInteger(link.Lv) || link.Lv<0) errors.push(`L[${i}].Lv must be a non-negative integer.`);
+    }
+  });
+  tpl.R.forEach((route,i)=>{
+    if(!route || typeof route!=='object' || Array.isArray(route)) errors.push(`R[${i}] must be an object.`);
+    else{
+      if(!Array.isArray(route.P) || route.P.length<2 || !route.P.every(validPin)) errors.push(`R[${i}].P must be a path of existing pin indexes.`);
+      if(typeof route.Q!=='number' || route.Q<=0) errors.push(`R[${i}].Q must be a positive number.`);
+      if(typeof route.T!=='number') errors.push(`R[${i}].T must be a type id number.`);
+    }
+  });
+  return {ok:errors.length===0, tpl, errors, warnings};
+}
+
+function countPinsByType(tpl){
+  const counts=new Map();
+  for(const pin of tpl.P) counts.set(pin.T,(counts.get(pin.T)||0)+1);
+  return counts;
+}
+
+function inferLayoutFromComment(comment){
+  const text=String(comment||'').toLowerCase();
+  if(text.includes('serial')) return {layout:'chain', layoutSub:'serial'};
+  if(text.includes('semi-star')) return {layout:'star', layoutSub:'semistar'};
+  if(text.includes('hub')) return {layout:'star', layoutSub:'hub'};
+  return {layout:'star', layoutSub:'full'};
+}
+
+function inferConfigFromTemplate(tpl){
+  const counts=countPinsByType(tpl);
+  const planet=PLANETS[tpl.Pln]||PLANETS[2015];
+  const ecuCount=counts.get(planet.ecu)||0;
+  const nStor=counts.get(planet.stor)||0;
+  const nLpad=counts.get(planet.lp)||0;
+  const factoryTypeIds=new Set([planet.basic, planet.adv, planet.ht, PLANETS[2016].adv, PLANETS[2016].ht]);
+  const factoryPins=tpl.P.filter(pin=>factoryTypeIds.has(pin.T));
+  const productCounts=new Map();
+  for(const pin of factoryPins){
+    if(typeof pin.S==='number') productCounts.set(pin.S,(productCounts.get(pin.S)||0)+1);
+  }
+  const productId=[...productCounts.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0];
+  const product=PRODUCTS.find(p=>p.id===productId);
+  const miningByP1=MINING_RES.findIndex(r=>r.p1===productId);
+  const miningByP0=MINING_RES.findIndex(r=>tpl.R.some(route=>route.T===r.p0));
+  const isMining=ecuCount>0 || miningByP1>=0 || miningByP0>=0;
+  const layout=inferLayoutFromComment(tpl.Cmt);
+  return {
+    ccu:tpl.CmdCtrLv,
+    radius:tpl.Diam/2,
+    pln:tpl.Pln,
+    nAuto:false,
+    mode:isMining?'mining':'factory',
+    nFact:factoryPins.length,
+    nStor:nStor,
+    nLpad:Math.max(nLpad,1),
+    nEcu:Math.max(ecuCount,1),
+    nHead:Math.max(...tpl.P.filter(pin=>pin.T===planet.ecu).map(pin=>pin.H||0),0),
+    miningRes:miningByP1>=0?miningByP1:(miningByP0>=0?miningByP0:int('miningRes',11)),
+    tier:product?product.tier:$id('tier').value,
+    factoryProd:product?product.id:$id('factoryProd').value,
+    layout:layout.layout,
+    layoutSub:layout.layoutSub,
+  };
+}
+
+function applyConfigPatch(values){
+  const firstPass=['ccu','mode','tier','nAuto','nFact','nStor','nLpad','nEcu','nHead','radius','pln','miningRes','layout'];
+  for(const id of firstPass) setControlValue(id,values[id]);
+  populateLayoutSub();
+  setControlValue('layoutSub',values.layoutSub);
+  populateFactoryProd();
+  setControlValue('factoryProd',values.factoryProd);
+  update();
+  saveCalculatorState();
+}
+
+function validateJsonInput(){
+  const result=parseTemplateText($id('jsonInput').value);
+  if(result.ok){
+    const suffix=result.warnings.length?` Warnings: ${result.warnings.join(' ')}`:'';
+    setJsonStatus(`Valid PI template. Pins: ${result.tpl.P.length}, links: ${result.tpl.L.length}, routes: ${result.tpl.R.length}.${suffix}`,'ok');
+  }else{
+    setJsonStatus(result.errors.join(' '),'bad');
+  }
+  return result;
+}
+
+function applyImportedJson(){
+  const result=validateJsonInput();
+  if(!result.ok) return;
+  applyConfigPatch(inferConfigFromTemplate(result.tpl));
+  setJsonStatus('Template JSON is valid and its main settings were applied to the calculator.','ok');
+}
+
+async function pasteJsonFromClipboard(){
+  if(!navigator.clipboard || !navigator.clipboard.readText){
+    setJsonStatus('Clipboard read is not available in this browser context. Paste the JSON manually, then validate.','bad');
+    return;
+  }
+  try{
+    $id('jsonInput').value=await navigator.clipboard.readText();
+    validateJsonInput();
+  }catch(e){
+    setJsonStatus(`Clipboard read failed: ${e.message}`,'bad');
+  }
+}
+
+function loadJsonFile(file){
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    $id('jsonInput').value=String(reader.result||'');
+    validateJsonInput();
+  };
+  reader.onerror=()=>setJsonStatus('Could not read the selected file.','bad');
+  reader.readAsText(file);
 }
 
 /* ================= UI Population ================= */
@@ -514,12 +725,22 @@ function update(){
 
 /* ================= Event Binding ================= */
 const bindIds=['ccu','mode','tier','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
-for(const id of bindIds) $id(id).addEventListener('input',update);
+for(const id of bindIds) $id(id).addEventListener('input',()=>{ update(); saveCalculatorState(); });
 $id('btnExport').addEventListener('click',exportJSON);
 $id('btnCopy').addEventListener('click',copyJSON);
+$id('btnPaste').addEventListener('click',pasteJsonFromClipboard);
+$id('btnValidate').addEventListener('click',validateJsonInput);
+$id('btnApplyImport').addEventListener('click',applyImportedJson);
+$id('jsonFile').addEventListener('change',(event)=>loadJsonFile(event.target.files[0]));
+$id('jsonInput').addEventListener('input',validateJsonInput);
+$id('themeToggle').addEventListener('change',saveTheme);
 
 window.addEventListener('DOMContentLoaded',()=>{
   populateMiningRes();
   populateLayoutSub();
+  populateFactoryProd();
+  restoreTheme();
+  restoreCalculatorState();
   update();
+  saveCalculatorState();
 });

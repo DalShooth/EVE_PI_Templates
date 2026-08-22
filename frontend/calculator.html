@@ -13,13 +13,13 @@
       <input id="themeToggle" type="checkbox">
       <span class="theme-track" aria-hidden="true"></span>
     </label>
-    <p class="eyebrow">Planetary Industry / EVE Online</p>
-    <h1>Template Limit Calculator</h1>
-    <p class="subtitle">Plan and generate PI templates with CPU/PG feasibility checks.</p>
     <nav class="navbar">
       <a href="index.html" class="nav-link">Dependencies Map</a>
       <a href="calculator.html" class="nav-link active">Calculator</a>
     </nav>
+    <p class="eyebrow">Planetary Industry / EVE Online</p>
+    <h1>Template Limit Calculator</h1>
+    <p class="subtitle">Plan and generate PI templates with CPU/PG feasibility checks.</p>
   </header>
   <main>
     <div class="calc-grid">
@@ -186,6 +186,21 @@
             <summary>Template JSON Preview</summary>
             <pre id="resExport"></pre>
           </details>
+        </div>
+
+        <h2>Import &amp; Validate Template</h2>
+        <div class="panel">
+          <div class="row">
+            <label for="jsonFile">Template file</label>
+            <input id="jsonFile" type="file" accept=".json,application/json">
+          </div>
+          <div class="row">
+            <button id="btnPaste" class="btn-secondary">Paste from Clipboard</button>
+            <button id="btnValidate" class="btn-secondary">Validate Input</button>
+            <button id="btnApplyImport" class="btn-primary">Apply to Calculator</button>
+          </div>
+          <textarea id="jsonInput" class="json-input" placeholder="Paste a PI template JSON here" spellcheck="false"></textarea>
+          <div id="jsonStatus" class="validation-status">No imported JSON yet.</div>
         </div>
 
         <h2>CPU / PG Usage</h2>

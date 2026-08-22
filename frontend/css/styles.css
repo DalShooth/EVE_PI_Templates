@@ -34,6 +34,10 @@ body:has(#themeToggle:checked) .canvas { background: rgba(8, 14, 17, .94); }
 h1 { margin: 0; font-size: clamp(30px, 5vw, 58px); line-height: .98; font-weight: 500; }
 .eyebrow, header h1, header .subtitle { padding-right: 72px; }
 .subtitle { max-width: 720px; margin: 12px 0 0; color: var(--muted); font-size: 17px; }
+.navbar { position: absolute; top: 28px; right: calc(clamp(18px, 4vw, 58px) + 68px); display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+.nav-link { color: var(--muted); text-decoration: none; font: 700 13px 'Trebuchet MS', sans-serif; letter-spacing: .5px; padding: 4px 0; border-bottom: 2px solid transparent; transition: color .2s, border-color .2s; }
+.nav-link:hover { color: var(--ink); border-bottom-color: var(--accent); }
+.nav-link.active { color: var(--accent); border-bottom-color: var(--accent); }
 main { padding: 18px clamp(12px, 3vw, 42px) 44px; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; padding: 12px; background: var(--panel); border: 1px solid var(--line); }
 input { min-width: 220px; flex: 1; padding: 10px 12px; border: 1px solid #bdc9ce; background: var(--control); color: var(--ink); font: 15px 'Trebuchet MS', sans-serif; }
@@ -82,4 +86,4 @@ body:has(#themeToggle:checked) .tier-label { fill: #f3faf8; }
 .context-title { margin: 3px 6px 7px; color: var(--muted); font: 700 11px 'Trebuchet MS', sans-serif; letter-spacing: 1px; text-transform: uppercase; }
 .context-menu button { display: block; width: 100%; margin: 3px 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-menu .local { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
-@media (max-width: 700px) { header { padding-top: 22px; } .subtitle { font-size: 15px; } .legend { width: 100%; margin-left: 0; } }
+@media (max-width: 700px) { header { padding-top: 64px; } .navbar { top: 24px; left: clamp(18px, 4vw, 58px); right: 84px; gap: 14px; } .subtitle { font-size: 15px; } .legend { width: 100%; margin-left: 0; } }

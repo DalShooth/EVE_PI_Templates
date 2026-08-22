@@ -1,38 +1,5 @@
 /* Calculator-specific styles */
 
-/* Navigation bar in header */
-.navbar {
-  display: flex;
-  gap: 20px;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(23, 33, 43, 0.15);
-}
-
-body:has(#themeToggle:checked) .navbar {
-  border-top-color: rgba(220, 232, 232, 0.15);
-}
-
-.nav-link {
-  color: var(--muted);
-  text-decoration: none;
-  font: 700 13px 'Trebuchet MS', sans-serif;
-  letter-spacing: 0.5px;
-  padding: 6px 0;
-  border-bottom: 2px solid transparent;
-  transition: color 0.2s, border-color 0.2s;
-}
-
-.nav-link:hover {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-}
-
-.nav-link.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-
 /* Calculator grid layout */
 .calc-grid {
   display: grid;
@@ -298,6 +265,53 @@ details > * + * {
   border-radius: 0;
   font-family: 'Courier New', monospace;
   color: var(--ink);
+}
+
+.json-input {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid #bdc9ce;
+  background: var(--control);
+  color: var(--ink);
+  font: 12px/1.45 'Courier New', monospace;
+}
+
+.json-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #fff1e9;
+}
+
+body:has(#themeToggle:checked) .json-input {
+  border-color: var(--line);
+  background: var(--control);
+}
+
+body:has(#themeToggle:checked) .json-input:focus {
+  background: #3a302b;
+}
+
+.validation-status {
+  margin-top: 10px;
+  padding: 10px;
+  border-left: 3px solid var(--line);
+  background: rgba(100, 114, 125, 0.08);
+  color: var(--muted);
+  font: 700 12px/1.4 'Trebuchet MS', sans-serif;
+}
+
+.validation-status.ok {
+  border-left-color: #2d8a75;
+  color: #2d8a75;
+  background: rgba(45, 138, 117, 0.1);
+}
+
+.validation-status.bad {
+  border-left-color: #bd5b45;
+  color: #bd5b45;
+  background: rgba(189, 91, 69, 0.1);
 }
 
 /* Status div */
