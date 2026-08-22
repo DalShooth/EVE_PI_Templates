@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EVE PI Dependencies</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header>
+    <label class="theme-switch" for="themeToggle" title="Toggle dark mode" aria-label="Toggle dark mode">
+      <input id="themeToggle" type="checkbox">
+      <span class="theme-track" aria-hidden="true"></span>
+    </label>
+    <p class="eyebrow">Planetary Industry / EVE Online</p>
+    <h1>From raw resource to P4</h1>
+    <p class="subtitle">Dependency map for the templates in this repository.</p>
+  </header>
+  <main>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Search a commodity..." aria-label="Search a commodity">
+      <label for="ccuLevel">CCU</label>
+      <select id="ccuLevel" aria-label="Command Center Upgrades level">
+        <option value="1">Command Center Upgrades I</option>
+        <option value="2">Command Center Upgrades II</option>
+        <option value="3">Command Center Upgrades III</option>
+        <option value="4">Command Center Upgrades IV</option>
+        <option value="5" selected>Command Center Upgrades V</option>
+      </select>
+      <button class="tier active" data-filter="ALL">All</button>
+      <button class="tier" data-filter="P0">P0</button>
+      <button class="tier" data-filter="P1">P1</button>
+      <button class="tier" data-filter="P2">P2</button>
+      <button class="tier" data-filter="P3">P3</button>
+      <button class="tier" data-filter="P4">P4</button>
+      <div class="legend"><span class="p0">P0</span><span class="p1">P1</span><span class="p2">P2</span><span class="p3">P3</span><span class="p4">P4</span></div>
+    </div>
+    <p class="meta" id="meta">Select a commodity to isolate its inputs and outputs.</p>
+    <div class="canvas"><svg id="graph" viewBox="0 0 1410 1760" role="img" aria-label="Interactive dependency graph from P0 to P4"></svg></div>
+    <p class="note">P1: Basic Industry Facility · P2/P3: Advanced Industry Facility · P4: High-Tech Production Plant</p>
+  </main>
+  <div id="contextMenu" class="context-menu" role="menu" aria-hidden="true"></div>
+  <input id="localJson" type="file" accept=".json,application/json" hidden>
+  <script src="js/app.js"></script>
+</body>
+</html>
