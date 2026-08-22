@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EVE PI Calculator</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/calculator.css">
+</head>
+<body>
+  <header>
+    <label class="theme-switch" for="themeToggle" title="Toggle dark mode" aria-label="Toggle dark mode">
+      <input id="themeToggle" type="checkbox">
+      <span class="theme-track" aria-hidden="true"></span>
+    </label>
+    <nav class="navbar">
+      <a href="index.html" class="nav-link">Dependencies Map</a>
+      <a href="calculator.html" class="nav-link active">Calculator</a>
+    </nav>
+    <p class="eyebrow">Planetary Industry / EVE Online</p>
+    <h1>Template Limit Calculator</h1>
+    <p class="subtitle">Plan and generate PI templates with CPU/PG feasibility checks.</p>
+  </header>
+  <main>
+    <div class="calc-grid">
+      <!-- ============ Config ============ -->
+      <div class="calc-sidebar">
+        <h2>Configuration</h2>
+        <div class="panel">
+          <div class="row">
+            <label>Command Center Level (CCU)</label>
+            <select id="ccu">
+              <option value="0">0</option><option value="1">1</option><option value="2">2</option>
+              <option value="3">3</option><option value="4">4</option><option value="5" selected>5</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>Mode</label>
+            <select id="mode">
+              <option value="mining" selected>Mining P0→P1 (Basic)</option>
+              <option value="factory">Factory (P1/P2/P3/P4)</option>
+            </select>
+          </div>
+          <div class="row" id="tierRow">
+            <label>Processing Tier</label>
+            <select id="tier">
+              <option value="P1P2" selected>P1→P2 (Advanced)</option>
+              <option value="P2P3">P2→P3 (Advanced)</option>
+              <option value="P3P4">P3→P4 (High-Tech)</option>
+            </select>
+          </div>
+          <div class="row" id="prodRow" style="display:none;">
+            <label>Target Product</label>
+            <select id="factoryProd"></select>
+          </div>
+          <div class="row">
+            <label>Factory Count N</label>
+            <input type="number" id="nFact" value="8" min="0" max="40" step="1">
+          </div>
+          <div class="row">
+            <label><input type="checkbox" id="nAuto" checked style="flex:0; width:auto; min-width:0;"> Auto-fit</label>
+            <div class="hint">Auto-fit factory count to CCU</div>
+          </div>
+          <div class="row">
+            <label>Storage</label>
+            <input type="number" id="nStor" value="1" min="0" max="20" step="1">
+          </div>
+          <div class="row">
+            <label>Launchpad Count</label>
+            <input type="number" id="nLpad" value="1" min="1" max="10" step="1">
+          </div>
+        </div>
+
+        <h2 id="miningHead">Mining Settings</h2>
+        <div class="panel" id="miningPanel">
+          <div class="row">
+            <label>Extractor (ECU) Count</label>
+            <input type="number" id="nEcu" value="1" min="1" max="6" step="1">
+          </div>
+          <div class="row">
+            <label>Extractor Heads per ECU</label>
+            <input type="number" id="nHead" value="10" min="0" max="10" step="1">
+            <div class="hint">≤10 per ECU</div>
+          </div>
+          <div class="row">
+            <label>Daily Yield (P0/day)</label>
+            <input type="number" id="yield" value="1150000" min="0" step="10000">
+            <div class="hint">Normal ~1.15M</div>
+          </div>
+          <div class="row">
+            <label>P0 Resource</label>
+            <select id="miningRes"></select>
+          </div>
+        </div>
+
+        <h2>Planet &amp; Layout</h2>
+        <div class="panel">
+          <div class="row">
+            <label>Planet Radius r (km)</label>
+            <input type="number" id="radius" value="5000" min="2500" step="100">
+          </div>
+          <div class="row">
+            <label>Planet Type</label>
+            <select id="pln">
+              <option value="11">Temperate</option>
+              <option value="12">Ice</option>
+              <option value="13">Gas</option>
+              <option value="2014">Oceanic</option>
+              <option value="2015" selected>Lava</option>
+              <option value="2016">Barren</option>
+              <option value="2017">Storm</option>
+              <option value="2063">Plasma</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>Layout Category</label>
+            <select id="layout">
+              <option value="star" selected>Star</option>
+              <option value="chain">Chain</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>Layout Subtype</label>
+            <select id="layoutSub"></select>
+            <div class="hint" id="layoutHint">Full Star: each factory links to storage+launchpad</div>
+          </div>
+          <div class="row">
+            <label>Link Segment Factor</label>
+            <input type="number" id="seg" value="1.5" min="0.5" step="0.1">
+          </div>
+          <div class="row">
+            <label><input type="checkbox" id="segAuto" checked style="flex:0; width:auto; min-width:0;"> Auto-estimate</label>
+          </div>
+        </div>
+
+        <h2>Link Version &amp; Upgrades</h2>
+        <div class="panel">
+          <div class="row">
+            <label>Link Version</label>
+            <select id="linkVer">
+              <option value="old" selected>Legacy (2022) · 250 m³/h</option>
+              <option value="new">New (2026) · 1,250 m³/h</option>
+            </select>
+          </div>
+          <div class="row" id="mapRow">
+            <label>Mapping Mode</label>
+            <select id="mapMode">
+              <option value="floor" selected>Floor</option>
+              <option value="ceil">Ceil</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>ECU→Storage Link</label>
+            <select id="upgEcu"><option value="0" selected>0</option></select>
+          </div>
+          <div class="row" id="trunkRow">
+            <label>Hub/Trunk Link</label>
+            <select id="upgTrunk"><option value="0" selected>0</option></select>
+          </div>
+          <div class="row">
+            <label>Other Links</label>
+            <select id="upgOther"><option value="0" selected>0</option></select>
+          </div>
+        </div>
+
+        <h2>Commodity Volumes (m³/unit)</h2>
+        <div class="panel">
+          <div class="row"><label>P0</label><input type="number" id="vP0" value="0.005" min="0.001" step="0.001"></div>
+          <div class="row"><label>P1</label><input type="number" id="vP1" value="0.19" min="0.05" step="0.01"></div>
+          <div class="row"><label>P2</label><input type="number" id="vP2" value="0.75" min="0.1" step="0.05"></div>
+          <div class="row"><label>P3</label><input type="number" id="vP3" value="6" min="1" step="0.5"></div>
+          <div class="row"><label>P4</label><input type="number" id="vP4" value="50" min="5" step="5"></div>
+        </div>
+      </div>
+
+      <!-- ============ Results ============ -->
+      <div class="calc-results">
+        <h2>Export Template</h2>
+        <div class="panel">
+          <div class="row">
+            <button id="btnExport" class="btn-primary">Export Template JSON</button>
+            <button id="btnCopy" class="btn-secondary">Copy to Clipboard</button>
+          </div>
+          <div class="hint">Paste into the in-game Planetary Industry template editor</div>
+          <details>
+            <summary>Template JSON Preview</summary>
+            <pre id="resExport"></pre>
+          </details>
+        </div>
+
+        <h2>Import &amp; Validate Template</h2>
+        <div class="panel">
+          <div class="row">
+            <label for="jsonFile">Template file</label>
+            <input id="jsonFile" type="file" accept=".json,application/json">
+          </div>
+          <div class="row">
+            <button id="btnPaste" class="btn-secondary">Paste from Clipboard</button>
+            <button id="btnValidate" class="btn-secondary">Validate Input</button>
+            <button id="btnApplyImport" class="btn-primary">Apply to Calculator</button>
+          </div>
+          <textarea id="jsonInput" class="json-input" placeholder="Paste a PI template JSON here" spellcheck="false"></textarea>
+          <div id="jsonStatus" class="validation-status">No imported JSON yet.</div>
+        </div>
+
+        <h2>CPU / PG Usage</h2>
+        <div class="panel">
+          <table id="resSummary" class="summary"></table>
+          <div id="resStatus"></div>
+        </div>
+
+        <h2 id="resSupplyHead">Supply Assessment</h2>
+        <div class="panel" id="resSupply"></div>
+
+        <h2 id="resFactoryHead">Factory Daily Throughput</h2>
+        <div class="panel" id="resFactory"></div>
+
+        <h2>Link Throughput Bottleneck Check</h2>
+        <div class="panel">
+          <table id="resLinks"></table>
+          <div class="hint">Required m³/h = flow × volume ÷ 24; upgrade the link if exceeded</div>
+        </div>
+
+        <h2>CCU 0-5 Max Factories (current config)</h2>
+        <div class="panel">
+          <table id="resMaxN"></table>
+          <div class="hint">Auto-estimates the structural ceiling for each CCU level</div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script src="js/calculator.js"></script>
+</body>
+</html>
