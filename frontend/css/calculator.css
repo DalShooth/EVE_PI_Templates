@@ -314,6 +314,111 @@ body:has(#themeToggle:checked) .json-input:focus {
   background: rgba(189, 91, 69, 0.1);
 }
 
+.template-view-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.template-view-chip {
+  display: inline-block;
+  margin: 0 6px 6px 0;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  background: var(--control);
+  font: 700 11px 'Trebuchet MS', sans-serif;
+  letter-spacing: 0.4px;
+}
+
+.template-view-note {
+  margin-top: 8px;
+  padding: 8px;
+  border-left: 3px solid #c38a2d;
+  background: rgba(195, 138, 45, 0.1);
+  color: #c38a2d;
+  font: 700 12px/1.4 'Trebuchet MS', sans-serif;
+}
+
+.template-view-note.ok {
+  border-left-color: #2d8a75;
+  background: rgba(45, 138, 117, 0.1);
+  color: #2d8a75;
+}
+
+.template-schema-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+#templateGraph {
+  display: block;
+  width: 100%;
+  min-height: 400px;
+}
+
+#templateGraph .tpl-edge {
+  stroke: #8a99a2;
+  stroke-width: 2;
+  opacity: 0.85;
+  transition: opacity 0.15s, stroke 0.15s, stroke-width 0.15s;
+}
+
+#templateGraph .tpl-edge.is-dim {
+  opacity: 0.2;
+}
+
+#templateGraph .tpl-edge.is-active {
+  stroke: var(--accent);
+  stroke-width: 3;
+  opacity: 1;
+}
+
+#templateGraph .tpl-node {
+  cursor: pointer;
+}
+
+#templateGraph .tpl-node circle {
+  transition: stroke-width 0.15s, opacity 0.15s;
+}
+
+#templateGraph .tpl-node text {
+  transition: opacity 0.15s;
+}
+
+#templateGraph .tpl-node.is-dim {
+  opacity: 0.35;
+}
+
+#templateGraph .tpl-node.is-active circle {
+  stroke-width: 2;
+}
+
+.template-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.template-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  background: var(--control);
+  font: 700 11px 'Trebuchet MS', sans-serif;
+}
+
+.template-legend-dot {
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(23, 33, 43, 0.3);
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
 /* Status div */
 #resStatus {
   margin-top: 10px;

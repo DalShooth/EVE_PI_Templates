@@ -157,15 +157,54 @@ function int(id, def){ const v=parseInt($id(id).value,10); return isNaN(v)?def:v
 function fmt(x){ return Math.round(x).toLocaleString('it-IT'); }
 function fmt1(x){ return (Math.round(x*10)/10).toLocaleString('it-IT'); }
 
+let manualPinOverrides=null;
+let manualTemplateSignature='';
+
+function templateSignature(tpl){
+  if(!tpl || !Array.isArray(tpl.P) || !Array.isArray(tpl.L)) return '';
+  return `${tpl.Pln}|${tpl.P.length}|${tpl.P.map(p=>p.T).join(',')}|${tpl.L.length}`;
+}
+
+function generateTemplateFromCfg(cfg){
+  return cfg.mode==='mining' ? buildMiningTemplate(cfg) : buildFactoryTemplate(cfg);
+}
+
+function applyManualOverridesToTemplate(tpl){
+  const sig=templateSignature(tpl);
+  if(!manualPinOverrides || sig!==manualTemplateSignature) return tpl;
+  const n=Math.min(tpl.P.length, manualPinOverrides.length);
+  for(let i=0;i<n;i++){
+    const o=manualPinOverrides[i];
+    if(!o) continue;
+    tpl.P[i].La=+Number(o.La).toFixed(5);
+    tpl.P[i].Lo=+Number(o.Lo).toFixed(5);
+  }
+  return tpl;
+}
+
+function getActiveTemplate(cfg){
+  const tpl=generateTemplateFromCfg(cfg);
+  return applyManualOverridesToTemplate(tpl);
+}
+
+function storeManualOverridesFromTemplate(tpl){
+  manualTemplateSignature=templateSignature(tpl);
+  manualPinOverrides=tpl.P.map(p=>({La:p.La, Lo:p.Lo}));
+}
+
 /* ================= Configuration ================= */
 function readCfg(){
+  const mode=$id('mode').value;
+  const rawStor=int('nStor',1);
+  const rawLpad=int('nLpad',1);
   return {
-    ccu:int('ccu',5), mode:$id('mode').value, tier:$id('tier').value,
-    nFact:int('nFact',8), nStor:int('nStor',1), nLpad:int('nLpad',1),
+    ccu:int('ccu',5), mode:mode, tier:$id('tier').value,
+    nFact:int('nFact',8), nStor:mode==='mining'?Math.max(1,rawStor):Math.max(0,rawStor), nLpad:Math.max(1,rawLpad),
     nEcu:int('nEcu',1), nHead:int('nHead',10), yield:num('yield',1150000),
     radius:num('radius',5000), pln:int('pln',2015), resIdx:int('miningRes',11),
     prodId:int('factoryProd',2329),
     layout:$id('layout').value, layoutSub:$id('layoutSub').value,
+    chainDepth:Math.max(1,int('chainDepth',6)),
     seg:($id('segAuto').checked)?($id('layout').value==='star'?1.5:1.0):num('seg',1.5),
     ver:getVersion(),
     upgEcu:int('upgEcu',0), upgTrunk:int('upgTrunk',0), upgOther:int('upgOther',0),
@@ -175,38 +214,304 @@ function readCfg(){
 
 /* ================= Template Generation ================= */
 const SUB_LABEL={full:'Full Star',hub:'Hub Pair',semistar:'Semi-Star',serial:'Serial'};
+const MIN_PIN_RHO=0.012008578;
+const MIN_PIN_GAP=MIN_PIN_RHO*1.02;
 
 function polar(la0,lo0,rho,th){ return {la:la0+rho*Math.cos(th), lo:lo0+rho*Math.sin(th)}; }
 function layoutSubOf(cfg){ return cfg.layoutSub||(cfg.layout==='star'?'full':'serial'); }
 function ringRho(cfg,N){
-  const mlR=0.012008578;
-  const rhoSpacing=N>1?mlR/(2*Math.sin(Math.PI/N)):mlR;
-  return Math.max(cfg.seg*mlR, rhoSpacing, 0.012+mlR);
+  const rhoSpacing=N>1?MIN_PIN_GAP/(2*Math.sin(Math.PI/N)):MIN_PIN_GAP;
+  return Math.max(rhoSpacing, MIN_PIN_GAP);
 }
 function ringLenKm(cfg,N){ return ringRho(cfg,N)*cfg.radius; }
+
+function buildChainSlices(total, maxDepth){
+  const depth=Math.max(1, maxDepth|0);
+  const slices=[];
+  if(total<=0) return slices;
+
+  // Use the minimum branch count that satisfies max depth, then spread uniformly.
+  const branchCount=Math.ceil(total/depth);
+  const base=Math.floor(total/branchCount);
+  const extra=total%branchCount;
+
+  let cursor=0;
+  for(let i=0;i<branchCount;i++){
+    const size=base + (i<extra?1:0);
+    slices.push({start:cursor, end:cursor+size});
+    cursor+=size;
+  }
+  return slices;
+}
+
+function placeLaunchpadsNearStorage(addPin, lpType, count, storageCoords, fallbackBuilder){
+  if(count<=0) return [];
+  if(storageCoords && storageCoords.length){
+    const out=[];
+    const anchor=storageCoords[0];
+    const r=MIN_PIN_GAP;
+    for(let i=0;i<count;i++){
+      const a=(2*Math.PI*i)/Math.max(3,count);
+      out.push(addPin(anchor.la + r*Math.cos(a), anchor.lo + r*Math.sin(a), null, lpType));
+    }
+    return out;
+  }
+  return fallbackBuilder();
+}
+
+function enforceMinPinDistance(pins, minDist){
+  if(!pins || pins.length<2) return;
+  const minD=Math.max(0.00001, minDist);
+  const iters=10;
+  for(let step=0; step<iters; step++){
+    let moved=false;
+    for(let i=0;i<pins.length;i++){
+      for(let j=i+1;j<pins.length;j++){
+        const a=pins[i], b=pins[j];
+        let dx=b.La-a.La;
+        let dy=b.Lo-a.Lo;
+        let d=Math.hypot(dx,dy);
+        if(d>=minD) continue;
+        if(d<1e-8){
+          const seed=(i*31 + j*17) % 360;
+          const t=(seed*Math.PI)/180;
+          dx=Math.cos(t);
+          dy=Math.sin(t);
+          d=1;
+        }
+        const push=(minD-d)/2;
+        const ux=dx/d, uy=dy/d;
+        a.La-=ux*push;
+        a.Lo-=uy*push;
+        b.La+=ux*push;
+        b.Lo+=uy*push;
+        moved=true;
+      }
+    }
+    if(!moved) break;
+  }
+  for(const p of pins){
+    p.La=+p.La.toFixed(5);
+    p.Lo=+p.Lo.toFixed(5);
+  }
+}
+
+function optimizeLinksFromRoutes(links, routes, mustTouchPins=[]){
+  const edgeByDir=new Map();
+  const edgeByUnd=new Map();
+  const undKey=(a,b)=>a<b?`${a}|${b}`:`${b}|${a}`;
+  const dirKey=(a,b)=>`${a}>${b}`;
+
+  for(const l of links){
+    edgeByDir.set(dirKey(l.S,l.D), l);
+    if(!edgeByUnd.has(undKey(l.S,l.D))) edgeByUnd.set(undKey(l.S,l.D), l);
+  }
+
+  const out=[];
+  const usedUnd=new Set();
+  const touchCount=new Map();
+  const pushEdge=(a,b)=>{
+    const uk=undKey(a,b);
+    if(usedUnd.has(uk)) return;
+    let edge=edgeByDir.get(dirKey(a,b)) || edgeByDir.get(dirKey(b,a)) || edgeByUnd.get(uk);
+    if(!edge) edge={S:a,D:b,Lv:0};
+    out.push({S:edge.S,D:edge.D,Lv:edge.Lv??0});
+    usedUnd.add(uk);
+    touchCount.set(edge.S,(touchCount.get(edge.S)||0)+1);
+    touchCount.set(edge.D,(touchCount.get(edge.D)||0)+1);
+  };
+
+  for(const r of routes){
+    if(!r || !Array.isArray(r.P) || r.P.length<2) continue;
+    for(let i=0;i<r.P.length-1;i++) pushEdge(r.P[i], r.P[i+1]);
+  }
+
+  for(const pin of mustTouchPins){
+    if((touchCount.get(pin)||0)>0) continue;
+    const candidate=links.find(l=>l.S===pin || l.D===pin);
+    if(candidate) pushEdge(candidate.S, candidate.D);
+  }
+
+  return out;
+}
+
+function ensureAllLaunchpadsLinked(lpPins, storPins, factPins, links){
+  if(!lpPins.length) return;
+  const key=(s,d)=>`${s}>${d}`;
+  const existing=new Set(links.map(l=>key(l.S,l.D)));
+  const touches=(pin)=>links.some(l=>l.S===pin || l.D===pin);
+  const addLink=(s,d)=>{
+    const k=key(s,d);
+    if(existing.has(k)) return;
+    links.push({D:d,Lv:0,S:s});
+    existing.add(k);
+  };
+
+  for(let i=0;i<lpPins.length;i++){
+    const lp=lpPins[i];
+    if(touches(lp)) continue;
+    if(storPins.length){
+      addLink(storPins[i%storPins.length], lp);
+    }else if(factPins.length){
+      const anchor=factPins[Math.min(i, factPins.length-1)];
+      addLink(anchor, lp);
+    }
+  }
+}
 
 function buildMiningTemplate(cfg){
   const pl=PLANETS[cfg.pln]||PLANETS[2015];
   const res=MINING_RES[cfg.resIdx]||MINING_RES[11];
   const sub=layoutSubOf(cfg);
-  const pins=[], links=[], routes=[];
-  const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:+la.toFixed(5), Lo:+lo.toFixed(5), S:s, T:t}); return pins.length; };
+  const isChain=(cfg.layout==='chain' || sub==='serial');
+  const isHub=(sub==='hub');
+  const isSemi=(sub==='semistar');
+  const pins=[], routes=[];
+  let links=[];
+  const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:la, Lo:lo, S:s, T:t}); return pins.length; };
   const la0=1.5708, lo0=1.0;
   const lp=[],stor=[],ecu=[],fact=[];
+  const storCoords=[];
   const maxFlow=Math.max(cfg.nFact*144000, cfg.yield);
   const QECU=Math.round(maxFlow/Math.max(cfg.nEcu,1));
   const RHO=ringRho(cfg,cfg.nFact);
-  if(sub==='full'){
-    if(cfg.nStor===1) stor.push(addPin(la0,lo0,null,pl.stor));
-    else for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/cfg.nStor); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
-    for(let i=0;i<cfg.nLpad;i++){ const p=polar(la0,lo0,0.012, i*0.7); lp.push(addPin(p.la,p.lo,null,pl.lp)); }
-    for(let i=0;i<cfg.nEcu;i++){ const p=polar(la0,lo0,0.012, Math.PI + i*0.7); ecu.push(addPin(p.la,p.lo,res.p0,pl.ecu,10)); }
-    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,RHO, Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,res.p1,pl.basic)); }
+  if(!isChain){
+    if(cfg.nStor===1){ stor.push(addPin(la0,lo0,null,pl.stor)); storCoords.push({la:la0, lo:lo0}); }
+    else for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,MIN_PIN_GAP, i*2*Math.PI/cfg.nStor); stor.push(addPin(p.la,p.lo,null,pl.stor)); storCoords.push({la:p.la, lo:p.lo}); }
+    lp.push(...placeLaunchpadsNearStorage(addPin, pl.lp, cfg.nLpad, storCoords, ()=>{
+      const out=[];
+      for(let i=0;i<cfg.nLpad;i++){ const p=polar(la0,lo0,MIN_PIN_GAP, i*0.7); out.push(addPin(p.la,p.lo,null,pl.lp)); }
+      return out;
+    }));
+    for(let i=0;i<cfg.nEcu;i++){ const p=polar(la0,lo0,MIN_PIN_GAP, Math.PI + i*0.7); ecu.push(addPin(p.la,p.lo,res.p0,pl.ecu,10)); }
+    for(let i=0;i<cfg.nFact;i++){
+      const theta = isHub
+        ? (Math.PI/2 + (i%2===0?-1:1)*(Math.PI/6) + (Math.floor(i/2)*0.35))
+        : (Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1));
+      const p=polar(la0,lo0,RHO, theta);
+      fact.push(addPin(p.la,p.lo,res.p1,pl.basic));
+    }
     for(let i=0;i<ecu.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) links.push({D:s,Lv:0,S:ecu[i]}); }
-    for(let i=0;i<fact.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) links.push({D:fact[i],Lv:0,S:s}); links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]}); }
+    if(isHub){
+      for(let i=0;i<fact.length;i+=2){
+        const s=stor[(i/2)%Math.max(stor.length,1)];
+        const a=fact[i], b=fact[i+1];
+        if(s && a) links.push({D:a,Lv:0,S:s});
+        if(a && b) links.push({D:b,Lv:0,S:a});
+        if(a) links.push({D:lp[(i/2)%Math.max(lp.length,1)],Lv:0,S:a});
+        if(b) links.push({D:lp[(i/2)%Math.max(lp.length,1)],Lv:0,S:b});
+      }
+    }else if(isSemi){
+      for(let i=0;i<fact.length;i++){
+        const s=stor[i%Math.max(stor.length,1)];
+        if(s) links.push({D:fact[i],Lv:0,S:s});
+        if(s) links.push({D:s,Lv:0,S:fact[i]});
+      }
+      for(let i=0;i<stor.length;i++) links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:stor[i]});
+    }else{
+      for(let i=0;i<fact.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) links.push({D:fact[i],Lv:0,S:s}); links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]}); }
+    }
     for(let i=0;i<ecu.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) routes.push({P:[ecu[i],s], Q:QECU, T:res.p0}); }
-    for(let i=0;i<fact.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) routes.push({P:[s,fact[i]], Q:3000, T:res.p0}); routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]], Q:20, T:res.p1}); }
+    if(isHub){
+      for(let i=0;i<fact.length;i+=2){
+        const s=stor[(i/2)%Math.max(stor.length,1)];
+        const a=fact[i], b=fact[i+1], l=lp[(i/2)%Math.max(lp.length,1)];
+        if(s && a) routes.push({P:[s,a], Q:3000, T:res.p0});
+        if(s && a && b) routes.push({P:[s,a,b], Q:3000, T:res.p0});
+        if(a) routes.push({P:[a,l], Q:20, T:res.p1});
+        if(b) routes.push({P:[b,l], Q:20, T:res.p1});
+      }
+    }else if(isSemi){
+      for(let i=0;i<fact.length;i++){
+        const s=stor[i%Math.max(stor.length,1)];
+        const l=lp[i%Math.max(lp.length,1)];
+        if(s) routes.push({P:[s,fact[i]], Q:3000, T:res.p0});
+        if(s && l) routes.push({P:[fact[i],s,l], Q:20, T:res.p1});
+      }
+    }else{
+      for(let i=0;i<fact.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) routes.push({P:[s,fact[i]], Q:3000, T:res.p0}); routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]], Q:20, T:res.p1}); }
+    }
+  }else{
+    const storCount=Math.max(0,cfg.nStor);
+    const lpCount=Math.max(0,cfg.nLpad);
+    const slices=buildChainSlices(cfg.nFact, cfg.chainDepth);
+    for(let i=0;i<storCount;i++){
+      const la=la0-MIN_PIN_GAP, lo=lo0+(i*MIN_PIN_GAP);
+      stor.push(addPin(la, lo, null, pl.stor));
+      storCoords.push({la, lo});
+    }
+    lp.push(...placeLaunchpadsNearStorage(addPin, pl.lp, lpCount, storCoords, ()=>{
+      const out=[];
+      for(let i=0;i<lpCount;i++) out.push(addPin(la0+MIN_PIN_GAP, lo0+(i*MIN_PIN_GAP), null, pl.lp));
+      return out;
+    }));
+    for(let i=0;i<cfg.nEcu;i++) ecu.push(addPin(la0-MIN_PIN_GAP, lo0-MIN_PIN_GAP*(1+i*0.2), res.p0, pl.ecu, 10));
+    const step=MIN_PIN_GAP;
+    for(let g=0; g<slices.length; g++){
+      const laneLa=la0 + (g-(slices.length-1)/2)*MIN_PIN_GAP;
+      const s=slices[g];
+      for(let i=s.start;i<s.end;i++){
+        const inLane=i-s.start;
+        fact.push(addPin(laneLa, lo0 + MIN_PIN_GAP + inLane*step, res.p1, pl.basic));
+      }
+    }
+
+    const hubStor=stor.length?stor[0]:null;
+    const hubLp=lp.length?lp[0]:null;
+    if(hubStor && hubLp) links.push({D:hubLp,Lv:0,S:hubStor});
+
+    let cursor=0;
+    let prevTail=null;
+    for(let g=0; g<slices.length; g++){
+      const s=slices[g];
+      const chain=fact.slice(cursor, cursor+(s.end-s.start));
+      cursor+=chain.length;
+      if(!chain.length) continue;
+      const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : (hubStor||hubLp||prevTail);
+      if(sourcePin) links.push({D:chain[0],Lv:0,S:sourcePin});
+      for(let i=0;i<chain.length-1;i++) links.push({D:chain[i+1],Lv:0,S:chain[i]});
+      prevTail=chain[chain.length-1];
+    }
+
+    if(hubStor){
+      for(let i=0;i<ecu.length;i++) routes.push({P:[ecu[i],hubStor], Q:QECU, T:res.p0});
+    }else if(hubLp){
+      for(let i=0;i<ecu.length;i++) routes.push({P:[ecu[i],hubLp], Q:QECU, T:res.p0});
+    }else if(fact.length){
+      for(let i=0;i<ecu.length;i++) routes.push({P:[ecu[i],fact[0]], Q:QECU, T:res.p0});
+    }
+
+    if(!hubStor && !hubLp && fact.length){
+      for(let i=0;i<ecu.length;i++) links.push({D:fact[0],Lv:0,S:ecu[i]});
+    }else if(!hubStor && hubLp){
+      for(let i=0;i<ecu.length;i++) links.push({D:hubLp,Lv:0,S:ecu[i]});
+    }else if(hubStor){
+      for(let i=0;i<ecu.length;i++) links.push({D:hubStor,Lv:0,S:ecu[i]});
+    }
+
+    cursor=0;
+    prevTail=null;
+    for(let g=0; g<slices.length; g++){
+      const s=slices[g];
+      const chain=fact.slice(cursor, cursor+(s.end-s.start));
+      cursor+=chain.length;
+      if(!chain.length) continue;
+      const sourcePin=((isHub && prevTail && !hubStor && !hubLp) ? prevTail : (hubStor||hubLp||prevTail)) || chain[0];
+      for(let i=0;i<chain.length;i++){
+        routes.push({P:[sourcePin, ...chain.slice(0,i+1)], Q:3000, T:res.p0});
+        const outPath=[chain[i], ...chain.slice(0,i).reverse()];
+        if(!isHub){
+          if(hubStor) outPath.push(hubStor);
+          if(hubLp) outPath.push(hubLp);
+        }
+        routes.push({P:outPath, Q:20, T:res.p1});
+      }
+      prevTail=chain[chain.length-1];
+    }
   }
+  ensureAllLaunchpadsLinked(lp, stor, fact, links);
+  links=optimizeLinksFromRoutes(links, routes, lp);
+  enforceMinPinDistance(pins, MIN_PIN_GAP);
   return {CmdCtrLv:cfg.ccu, Cmt:`Miner ${res.p0n}-${res.p1n} ${cfg.nFact}fac ${pl.name} ${SUB_LABEL[sub]}`, Diam:2*cfg.radius, L:links, P:pins, Pln:cfg.pln, R:routes};
 }
 
@@ -215,25 +520,163 @@ function buildFactoryTemplate(cfg){
   const prod=PRODUCTS.find(p=>p.id===cfg.prodId)||PRODUCTS[0];
   const struct=prod.tier==='P3P4'?pl.ht:pl.adv;
   const sub=layoutSubOf(cfg);
-  const pins=[], links=[], routes=[];
-  const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:+la.toFixed(5), Lo:+lo.toFixed(5), S:s, T:t}); return pins.length; };
+  const isChain=(cfg.layout==='chain' || sub==='serial');
+  const isHub=(sub==='hub');
+  const isSemi=(sub==='semistar');
+  const pins=[], routes=[];
+  let links=[];
+  const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:la, Lo:lo, S:s, T:t}); return pins.length; };
   const la0=1.5708, lo0=1.0;
   const lp=[],stor=[],fact=[];
-  if(sub==='full'){
-    for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,lo0,null,pl.lp));
-    for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*0.9); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
-    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,ringRho(cfg,cfg.nFact), Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,prod.id,struct)); }
-    for(let i=0;i<fact.length;i++) links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]});
-    for(const s of stor){ for(const l of lp){ links.push({D:l,Lv:0,S:s}); } }
+  const storCoords=[];
+  if(!isChain){
+    for(let i=0;i<cfg.nStor;i++){
+      const p=polar(la0,lo0,MIN_PIN_GAP, i*0.9);
+      stor.push(addPin(p.la,p.lo,null,pl.stor));
+      storCoords.push({la:p.la, lo:p.lo});
+    }
+    lp.push(...placeLaunchpadsNearStorage(addPin, pl.lp, cfg.nLpad, storCoords, ()=>{
+      const out=[];
+      for(let i=0;i<cfg.nLpad;i++) out.push(addPin(la0,lo0,null,pl.lp));
+      return out;
+    }));
+    for(let i=0;i<cfg.nFact;i++){
+      const theta = isHub
+        ? (Math.PI/2 + (i%2===0?-1:1)*(Math.PI/6) + (Math.floor(i/2)*0.35))
+        : (Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1));
+      const p=polar(la0,lo0,ringRho(cfg,cfg.nFact), theta);
+      fact.push(addPin(p.la,p.lo,prod.id,struct));
+    }
+    if(isHub){
+      for(let i=0;i<fact.length;i+=2){
+        const s=stor[(i/2)%Math.max(stor.length,1)];
+        const l=lp[(i/2)%Math.max(lp.length,1)];
+        const a=fact[i], b=fact[i+1];
+        if(s && a) links.push({D:a,Lv:0,S:s});
+        if(a && b) links.push({D:b,Lv:0,S:a});
+        if(a) links.push({D:l,Lv:0,S:a});
+        if(b) links.push({D:l,Lv:0,S:b});
+      }
+    }else if(isSemi){
+      for(let i=0;i<fact.length;i++){
+        const s=stor[i%Math.max(stor.length,1)];
+        if(s) links.push({D:fact[i],Lv:0,S:s});
+        if(s) links.push({D:s,Lv:0,S:fact[i]});
+      }
+      for(const s of stor){ for(const l of lp){ links.push({D:l,Lv:0,S:s}); } }
+    }else{
+      for(let i=0;i<fact.length;i++) links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]});
+      for(const s of stor){ for(const l of lp){ links.push({D:l,Lv:0,S:s}); } }
+    }
     for(const [inId,inQ] of prod.in){
       for(let i=0;i<fact.length;i++){
         const l=lp[i%Math.max(lp.length,1)], s=stor[i%Math.max(stor.length,1)];
         if(s&&l) routes.push({P:[l,s],Q:inQ,T:inId});
-        routes.push({P:[l,s,fact[i]],Q:inQ,T:inId});
+        if(isHub){
+          const a=fact[i], b=fact[i+1];
+          if(a) routes.push({P:[l,s,a],Q:inQ,T:inId});
+          if(a&&b) routes.push({P:[l,s,a,b],Q:inQ,T:inId});
+          i++;
+        }else if(isSemi){
+          routes.push({P:[l,s,fact[i]],Q:inQ,T:inId});
+        }else{
+          routes.push({P:[l,s,fact[i]],Q:inQ,T:inId});
+        }
       }
     }
-    for(let i=0;i<fact.length;i++) routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]],Q:prod.outQ,T:prod.id});
+    if(isSemi){
+      for(let i=0;i<fact.length;i++) routes.push({P:[fact[i],stor[i%Math.max(stor.length,1)],lp[i%Math.max(lp.length,1)]],Q:prod.outQ,T:prod.id});
+    }else{
+      for(let i=0;i<fact.length;i++) routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]],Q:prod.outQ,T:prod.id});
+    }
+  }else{
+    const storCount=Math.max(0,cfg.nStor);
+    const lpCount=Math.max(0,cfg.nLpad);
+    const slices=buildChainSlices(cfg.nFact, cfg.chainDepth);
+    for(let i=0;i<storCount;i++){
+      const la=la0-MIN_PIN_GAP, lo=lo0+(i*MIN_PIN_GAP);
+      stor.push(addPin(la, lo, null, pl.stor));
+      storCoords.push({la, lo});
+    }
+    lp.push(...placeLaunchpadsNearStorage(addPin, pl.lp, lpCount, storCoords, ()=>{
+      const out=[];
+      for(let i=0;i<lpCount;i++) out.push(addPin(la0+MIN_PIN_GAP, lo0+(i*MIN_PIN_GAP), null, pl.lp));
+      return out;
+    }));
+    const step=MIN_PIN_GAP;
+    for(let g=0; g<slices.length; g++){
+      const laneLa=la0 + (g-(slices.length-1)/2)*MIN_PIN_GAP;
+      const s=slices[g];
+      for(let i=s.start;i<s.end;i++){
+        const inLane=i-s.start;
+        fact.push(addPin(laneLa, lo0 + MIN_PIN_GAP + inLane*step, prod.id, struct));
+      }
+    }
+
+    const hubStor=stor.length?stor[0]:null;
+    const hubLp=lp.length?lp[0]:null;
+    if(hubStor && hubLp) links.push({D:hubLp,Lv:0,S:hubStor});
+
+    let cursor=0;
+    let prevTail=null;
+    for(let g=0; g<slices.length; g++){
+      const s=slices[g];
+      const chain=fact.slice(cursor, cursor+(s.end-s.start));
+      cursor+=chain.length;
+      if(!chain.length) continue;
+      const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : (hubStor||hubLp||prevTail);
+      if(sourcePin) links.push({D:chain[0],Lv:0,S:sourcePin});
+      for(let i=0;i<chain.length-1;i++) links.push({D:chain[i+1],Lv:0,S:chain[i]});
+
+      if(!isHub){
+        if(hubStor) links.push({D:hubStor,Lv:0,S:chain[chain.length-1]});
+        else if(hubLp) links.push({D:hubLp,Lv:0,S:chain[chain.length-1]});
+      }
+      prevTail=chain[chain.length-1];
+    }
+
+    for(const [inId,inQ] of prod.in){
+      cursor=0;
+      prevTail=null;
+      for(let g=0; g<slices.length; g++){
+        const s=slices[g];
+        const chain=fact.slice(cursor, cursor+(s.end-s.start));
+        cursor+=chain.length;
+        if(!chain.length) continue;
+        const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : null;
+        for(let i=0;i<chain.length;i++){
+          const path=[];
+          if(sourcePin) path.push(sourcePin);
+          if(!sourcePin){
+            if(hubLp) path.push(hubLp);
+            if(hubStor) path.push(hubStor);
+            if(!hubStor && !hubLp) path.push(chain[0]);
+          }
+          path.push(...chain.slice(0,i+1));
+          routes.push({P:path,Q:inQ,T:inId});
+        }
+        prevTail=chain[chain.length-1];
+      }
+    }
+    cursor=0;
+    for(let g=0; g<slices.length; g++){
+      const s=slices[g];
+      const chain=fact.slice(cursor, cursor+(s.end-s.start));
+      cursor+=chain.length;
+      if(!chain.length) continue;
+      for(let i=0;i<chain.length;i++){
+        const path=[chain[i],...chain.slice(i+1)];
+        if(!isHub){
+          if(hubStor) path.push(hubStor);
+          if(hubLp) path.push(hubLp);
+        }
+        routes.push({P:path,Q:prod.outQ,T:prod.id});
+      }
+    }
   }
+  ensureAllLaunchpadsLinked(lp, stor, fact, links);
+  links=optimizeLinksFromRoutes(links, routes, lp);
+  enforceMinPinDistance(pins, MIN_PIN_GAP);
   return {CmdCtrLv:cfg.ccu, Cmt:`Factory ${prod.name} ${cfg.nFact}fac ${SUB_LABEL[sub]}`, Diam:2*cfg.radius, L:links, P:pins, Pln:2016, R:routes};
 }
 
@@ -260,7 +703,7 @@ function serializeGame(tpl){
 
 function exportJSON(){
   const cfg=readCfg();
-  const tpl=cfg.mode==='mining'?buildMiningTemplate(cfg):buildFactoryTemplate(cfg);
+  const tpl=getActiveTemplate(cfg);
   const json=serializeGame(tpl);
   const blob=new Blob([json],{type:'application/json'});
   const a=document.createElement('a');
@@ -272,7 +715,7 @@ function exportJSON(){
 
 function copyJSON(){
   const cfg=readCfg();
-  const tpl=cfg.mode==='mining'?buildMiningTemplate(cfg):buildFactoryTemplate(cfg);
+  const tpl=getActiveTemplate(cfg);
   const json=serializeGame(tpl);
   const done=()=>{ const b=$id('btnCopy'); const old=b.textContent; b.textContent='Copied ✓'; setTimeout(()=>{ b.textContent=old; }, 1500); };
   const fallback=()=>{
@@ -290,6 +733,7 @@ function copyJSON(){
 /* ================= Persistence & Import ================= */
 const CALC_STATE_KEY='eve-pi-calculator-state';
 const THEME_KEY='eve-pi-theme';
+const TRANSFER_TEMPLATE_KEY='eve-pi-transfer-template-json';
 
 function setControlValue(id, value){
   const el=$id(id);
@@ -443,6 +887,8 @@ function inferConfigFromTemplate(tpl){
 }
 
 function applyConfigPatch(values){
+  manualPinOverrides=null;
+  manualTemplateSignature='';
   const firstPass=['ccu','mode','tier','nAuto','nFact','nStor','nLpad','nEcu','nHead','radius','pln','miningRes','layout'];
   for(const id of firstPass) setControlValue(id,values[id]);
   populateLayoutSub();
@@ -469,6 +915,30 @@ function applyImportedJson(){
   if(!result.ok) return;
   applyConfigPatch(inferConfigFromTemplate(result.tpl));
   setJsonStatus('Template JSON is valid and its main settings were applied to the calculator.','ok');
+}
+
+function applyTransferredJsonIfPresent(){
+  const payloadRaw=localStorage.getItem(TRANSFER_TEMPLATE_KEY);
+  if(!payloadRaw) return;
+  localStorage.removeItem(TRANSFER_TEMPLATE_KEY);
+  let payload=null;
+  try{
+    payload=JSON.parse(payloadRaw);
+  }catch(e){
+    setJsonStatus(`Transferred template payload is invalid: ${e.message}`,'bad');
+    return;
+  }
+  const jsonText=typeof payload==='string'?payload:(payload&&typeof payload==='object'&&typeof payload.json==='string'?payload.json:'');
+  if(!jsonText.trim()){
+    setJsonStatus('Transferred template is empty.','bad');
+    return;
+  }
+  $id('jsonInput').value=jsonText;
+  const result=validateJsonInput();
+  if(!result.ok) return;
+  applyConfigPatch(inferConfigFromTemplate(result.tpl));
+  const source=(payload&&typeof payload==='object'&&typeof payload.source==='string'&&payload.source.trim())?` (${payload.source})`:'';
+  setJsonStatus(`Transferred template imported${source} and applied to calculator settings.`,'ok');
 }
 
 async function pasteJsonFromClipboard(){
@@ -605,6 +1075,19 @@ function showHide(cfg){
   $id('resSupply').style.display=cfg.mode==='mining'?'':'none';
   $id('resFactoryHead').style.display=cfg.mode==='factory'?'':'none';
   $id('resFactory').style.display=cfg.mode==='factory'?'':'none';
+  $id('chainDepthRow').style.display=cfg.layout==='chain'?'':'none';
+
+  const storInput=$id('nStor');
+  if(cfg.mode==='mining'){
+    storInput.min='1';
+    if(parseInt(storInput.value,10)<1) storInput.value='1';
+  }else{
+    storInput.min='0';
+  }
+
+  const lpadInput=$id('nLpad');
+  lpadInput.min='1';
+  if(parseInt(lpadInput.value,10)<1) lpadInput.value='1';
 }
 
 function renderSummary(r){
@@ -660,6 +1143,286 @@ function renderFactory(cfg){
   $id('resFactory').innerHTML=h;
 }
 
+function renderTemplateView(r, cfg){
+  const chips=[
+    `Mode: ${cfg.mode==='mining'?'Mining P0->P1':'Factory'}`,
+    `Planet: ${(PLANETS[cfg.pln]||PLANETS[2015]).name}`,
+    `Layout: ${SUB_LABEL[layoutSubOf(cfg)]||layoutSubOf(cfg)}`,
+    `CCU: ${cfg.ccu}`,
+    `Radius: ${fmt(cfg.radius)} km`,
+  ];
+
+  let structures='';
+  structures+='<table><tr><th class="l">Structures</th><th>CPU</th><th>PG</th></tr>';
+  for(const s of r.structs){
+    structures+=`<tr><td class="l">${s.name}</td><td class="mono">${fmt(s.cpu)}</td><td class="mono">${fmt(s.pg)}</td></tr>`;
+  }
+  structures+=`<tr><td class="l"><strong>Structure Total</strong></td><td class="mono"><strong>${fmt(r.sCpu)}</strong></td><td class="mono"><strong>${fmt(r.sPg)}</strong></td></tr>`;
+  structures+=`<tr><td class="l">CCU${cfg.ccu} Remainder (structures)</td><td class="mono ${r.budget.cpu-r.sCpu>=0?'ok':'bad'}">${fmt(r.budget.cpu-r.sCpu)}</td><td class="mono ${r.budget.pg-r.sPg>=0?'ok':'bad'}">${fmt(r.budget.pg-r.sPg)}</td></tr>`;
+  structures+='</table>';
+
+  let totals='';
+  totals+='<table><tr><th class="l">Template Totals</th><th>CPU</th><th>PG</th></tr>';
+  totals+=`<tr><td class="l">Link construction</td><td class="mono">${fmt(r.lCpu)}</td><td class="mono">${fmt(r.lPg)}</td></tr>`;
+  totals+=`<tr><td class="l">Link upgrades</td><td class="mono">${fmt(r.uCpu)}</td><td class="mono">${fmt(r.uPg)}</td></tr>`;
+  totals+=`<tr><td class="l"><strong>Grand Total</strong></td><td class="mono"><strong>${fmt(r.totCpu)}</strong></td><td class="mono"><strong>${fmt(r.totPg)}</strong></td></tr>`;
+  totals+=`<tr><td class="l">CCU${cfg.ccu} Budget</td><td class="mono">${fmt(r.budget.cpu)}</td><td class="mono">${fmt(r.budget.pg)}</td></tr>`;
+  totals+=`<tr><td class="l">CCU${cfg.ccu} Remainder (all)</td><td class="mono ${r.cpuOk?'ok':'bad'}">${fmt(r.cpuLeft)}</td><td class="mono ${r.pgOk?'ok':'bad'}">${fmt(r.pgLeft)}</td></tr>`;
+  totals+='</table>';
+
+  let note='';
+  if(cfg.mode==='mining' && cfg.ccu===5 && cfg.nHead>=16 && cfg.radius>15000){
+    note='Warning: con CCU5 e 16+ heads per ECU, pianeti oltre 15,000 km tendono a saturare il PG (coerente con README).';
+  }else if(cfg.mode==='factory' && cfg.ccu===5 && cfg.nFact>=24 && cfg.radius>12500){
+    note='Warning: con setup factory denso (24+), oltre 12,500 km il costo link tende a superare il budget CCU5 (coerente con README).';
+  }else if(r.cpuOk && r.pgOk){
+    note='Template in range: CPU e PG rientrano nel budget selezionato.';
+  }else{
+    note='Template over budget: riduci factories/head oppure aumenta CCU.';
+  }
+
+  let html='';
+  html+=`<div>${chips.map(c=>`<span class="template-view-chip">${c}</span>`).join('')}</div>`;
+  html+='<div class="template-view-grid">';
+  html+=`<div>${structures}</div>`;
+  html+=`<div>${totals}</div>`;
+  html+='</div>';
+  html+=`<div class="template-view-note ${r.cpuOk&&r.pgOk?'ok':''}">${note}</div>`;
+  $id('resTemplateView').innerHTML=html;
+}
+
+function classifyPinType(pinType, planetType){
+  const pl=PLANETS[planetType]||PLANETS[2015];
+  if(pinType===pl.ecu) return 'ECU';
+  if(pinType===pl.stor) return 'Storage';
+  if(pinType===pl.lp) return 'Launchpad';
+  if(pinType===pl.basic) return 'Basic Factory';
+  if(pinType===pl.adv || pinType===PLANETS[2016].adv) return 'Advanced Factory';
+  if(pinType===pl.ht || pinType===PLANETS[2016].ht) return 'High-Tech Factory';
+  return 'Other';
+}
+
+function commodityNameFromTypeId(typeId){
+  if(typeId==null) return '';
+  for(const r of MINING_RES){
+    if(r.p0===typeId) return r.p0n;
+    if(r.p1===typeId) return r.p1n;
+  }
+  const prod=PRODUCTS.find(p=>p.id===typeId);
+  return prod?prod.name:'';
+}
+
+function pinLabel(pin, kind){
+  const commodity=commodityNameFromTypeId(pin.S);
+  if(kind==='ECU'){
+    return commodity?`ECU - ${commodity}`:'ECU';
+  }
+  if(kind==='Basic Factory' || kind==='Advanced Factory' || kind==='High-Tech Factory'){
+    return commodity?`${kind} - ${commodity}`:kind;
+  }
+  return kind;
+}
+
+function graphColor(kind){
+  if(kind==='ECU') return '#b85c3f';
+  if(kind==='Storage') return '#50657a';
+  if(kind==='Launchpad') return '#2d8a75';
+  if(kind==='Basic Factory') return '#75608f';
+  if(kind==='Advanced Factory') return '#c38a2d';
+  if(kind==='High-Tech Factory') return '#bd5b45';
+  return '#64727d';
+}
+
+function spreadCoincidentPins(points){
+  const groups=new Map();
+  for(let i=0;i<points.length;i++){
+    const p=points[i];
+    const key=`${p.x.toFixed(4)}:${p.y.toFixed(4)}`;
+    if(!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(i);
+  }
+  for(const idxs of groups.values()){
+    if(idxs.length<=1) continue;
+    const radius=12;
+    for(let k=0;k<idxs.length;k++){
+      const a=(2*Math.PI*k)/idxs.length;
+      points[idxs[k]].x+=Math.cos(a)*radius;
+      points[idxs[k]].y+=Math.sin(a)*radius;
+    }
+  }
+}
+
+function renderTemplateSchema(tpl){
+  const svg=$id('templateGraph');
+  const legend=$id('resTemplateLegend');
+  if(!svg || !legend) return;
+  if(!tpl || !Array.isArray(tpl.P) || !Array.isArray(tpl.L) || !tpl.P.length){
+    svg.setAttribute('viewBox','0 0 980 160');
+    svg.innerHTML='<text x="24" y="84" fill="var(--muted)" font-size="14" font-family="Trebuchet MS, sans-serif">Template vuoto: aumenta strutture o usa una configurazione valida per generare nodi e link.</text>';
+    legend.innerHTML='<span class="template-legend-item">Pins: 0</span><span class="template-legend-item">Links: 0</span>';
+    return;
+  }
+
+  const W=980, H=560, PAD=54;
+  const minLa=Math.min(...tpl.P.map(p=>p.La));
+  const maxLa=Math.max(...tpl.P.map(p=>p.La));
+  const minLo=Math.min(...tpl.P.map(p=>p.Lo));
+  const maxLo=Math.max(...tpl.P.map(p=>p.Lo));
+  const dLa=Math.max(0.00001, maxLa-minLa);
+  const dLo=Math.max(0.00001, maxLo-minLo);
+
+  const pts=tpl.P.map((p, idx)=>{
+    const x=PAD+((p.Lo-minLo)/dLo)*(W-PAD*2);
+    const y=PAD+((maxLa-p.La)/dLa)*(H-PAD*2);
+    const kind=classifyPinType(p.T, tpl.Pln);
+    return {idx:idx+1, x, y, kind, label:pinLabel(p, kind)};
+  });
+  spreadCoincidentPins(pts);
+
+  const byIndex=new Map(pts.map(p=>[p.idx,p]));
+  const kinds=[...new Set(pts.map(p=>p.kind))];
+
+  let out='';
+  out+=`<rect x="0" y="0" width="${W}" height="${H}" fill="transparent"></rect>`;
+
+  for(const l of tpl.L){
+    const s=byIndex.get(l.S), d=byIndex.get(l.D);
+    if(!s || !d) continue;
+    out+=`<line class="tpl-edge" data-s="${l.S}" data-d="${l.D}" x1="${s.x.toFixed(2)}" y1="${s.y.toFixed(2)}" x2="${d.x.toFixed(2)}" y2="${d.y.toFixed(2)}"></line>`;
+  }
+
+  for(const p of pts){
+    const c=graphColor(p.kind);
+    const labelText=p.label.length>30?`${p.label.slice(0,29)}...`:p.label;
+    out+=`<g class="tpl-node" data-idx="${p.idx}">`;
+    out+=`<title>${p.label}</title>`;
+    out+=`<circle cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="9" fill="${c}" stroke="#1a252e" stroke-width="1"></circle>`;
+    out+=`<text x="${(p.x+12).toFixed(2)}" y="${(p.y+4).toFixed(2)}" fill="var(--ink)" font-size="11" font-family="Trebuchet MS, sans-serif">${labelText}</text>`;
+    out+='</g>';
+  }
+
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  svg.innerHTML=out;
+
+  const edgeEls=[...svg.querySelectorAll('.tpl-edge')];
+  const nodeEls=[...svg.querySelectorAll('.tpl-node')];
+  const pointByIdx=new Map(pts.map(p=>[String(p.idx),p]));
+  let dragIdx=null;
+  let dragging=false;
+  let lockedNode=null;
+
+  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+  function clientToSvg(clientX, clientY){
+    const r=svg.getBoundingClientRect();
+    const sx=(clientX-r.left)/Math.max(1,r.width);
+    const sy=(clientY-r.top)/Math.max(1,r.height);
+    return {x:sx*W, y:sy*H};
+  }
+  function svgToGeo(x,y){
+    const nx=clamp((x-PAD)/(W-PAD*2),0,1);
+    const ny=clamp((y-PAD)/(H-PAD*2),0,1);
+    return {
+      lo:minLo + nx*dLo,
+      la:maxLa - ny*dLa,
+    };
+  }
+  function updateNodeDom(idx){
+    const node=svg.querySelector(`.tpl-node[data-idx="${idx}"]`);
+    const p=pointByIdx.get(String(idx));
+    if(!node || !p) return;
+    const circle=node.querySelector('circle');
+    const text=node.querySelector('text');
+    if(circle){ circle.setAttribute('cx', p.x.toFixed(2)); circle.setAttribute('cy', p.y.toFixed(2)); }
+    if(text){ text.setAttribute('x', (p.x+12).toFixed(2)); text.setAttribute('y', (p.y+4).toFixed(2)); }
+  }
+  function updateEdgesForIdx(idx){
+    for(const e of edgeEls){
+      const s=e.dataset.s, d=e.dataset.d;
+      if(s!==String(idx) && d!==String(idx)) continue;
+      const ps=pointByIdx.get(s), pd=pointByIdx.get(d);
+      if(!ps || !pd) continue;
+      e.setAttribute('x1', ps.x.toFixed(2));
+      e.setAttribute('y1', ps.y.toFixed(2));
+      e.setAttribute('x2', pd.x.toFixed(2));
+      e.setAttribute('y2', pd.y.toFixed(2));
+    }
+  }
+
+  function applyHighlight(nodeIdx){
+    const hasFocus=!!nodeIdx;
+    for(const e of edgeEls){
+      const connected=String(e.dataset.s)===String(nodeIdx) || String(e.dataset.d)===String(nodeIdx);
+      e.classList.toggle('is-active', hasFocus && connected);
+      e.classList.toggle('is-dim', hasFocus && !connected);
+    }
+    for(const n of nodeEls){
+      const idx=n.dataset.idx;
+      const connectedToAnyEdge=edgeEls.some(e=>
+        (String(e.dataset.s)===String(idx) && String(e.dataset.d)===String(nodeIdx)) ||
+        (String(e.dataset.d)===String(idx) && String(e.dataset.s)===String(nodeIdx)) ||
+        String(idx)===String(nodeIdx)
+      );
+      n.classList.toggle('is-active', hasFocus && String(idx)===String(nodeIdx));
+      n.classList.toggle('is-dim', hasFocus && !connectedToAnyEdge);
+    }
+  }
+
+  for(const n of nodeEls){
+    n.addEventListener('pointerdown',(ev)=>{
+      dragIdx=n.dataset.idx;
+      dragging=true;
+      n.setPointerCapture?.(ev.pointerId);
+      ev.preventDefault();
+    });
+    n.addEventListener('pointermove',(ev)=>{
+      if(!dragging || dragIdx!==n.dataset.idx) return;
+      const pos=clientToSvg(ev.clientX, ev.clientY);
+      const p=pointByIdx.get(String(dragIdx));
+      if(!p) return;
+      p.x=clamp(pos.x, PAD, W-PAD);
+      p.y=clamp(pos.y, PAD, H-PAD);
+      updateNodeDom(dragIdx);
+      updateEdgesForIdx(dragIdx);
+      const geo=svgToGeo(p.x,p.y);
+      const pin=tpl.P[Number(dragIdx)-1];
+      if(pin){ pin.La=+geo.la.toFixed(5); pin.Lo=+geo.lo.toFixed(5); }
+      storeManualOverridesFromTemplate(tpl);
+      renderExportTemplate(tpl);
+    });
+    n.addEventListener('pointerup',(ev)=>{
+      if(dragIdx===n.dataset.idx){
+        dragging=false;
+        dragIdx=null;
+        n.releasePointerCapture?.(ev.pointerId);
+      }
+    });
+    n.addEventListener('pointercancel',(ev)=>{
+      if(dragIdx===n.dataset.idx){
+        dragging=false;
+        dragIdx=null;
+        n.releasePointerCapture?.(ev.pointerId);
+      }
+    });
+    n.addEventListener('mouseenter',()=>{ if(!lockedNode) applyHighlight(n.dataset.idx); });
+    n.addEventListener('mouseleave',()=>{ if(!lockedNode) applyHighlight(null); });
+    n.addEventListener('click',()=>{
+      if(dragging) return;
+      if(lockedNode===n.dataset.idx){
+        lockedNode=null;
+        applyHighlight(null);
+      }else{
+        lockedNode=n.dataset.idx;
+        applyHighlight(lockedNode);
+      }
+    });
+  }
+
+  svg.addEventListener('mouseleave',()=>{ if(!lockedNode) applyHighlight(null); });
+
+  legend.innerHTML=kinds.map(k=>`<span class="template-legend-item"><span class="template-legend-dot" style="background:${graphColor(k)}"></span>${k}</span>`).join('')+
+    `<span class="template-legend-item">Pins: ${tpl.P.length}</span><span class="template-legend-item">Links: ${tpl.L.length}</span>`;
+}
+
 function maxFeasibleN(cfg){
   let best=-1;
   for(let N=0;N<=40;N++){
@@ -685,9 +1448,11 @@ function renderMaxN(cfg){
 }
 
 function renderExport(cfg){
-  let tpl;
+  renderExportTemplate(getActiveTemplate(cfg));
+}
+
+function renderExportTemplate(tpl){
   try{
-    tpl=cfg.mode==='mining'?buildMiningTemplate(cfg):buildFactoryTemplate(cfg);
     $id('resExport').textContent=serializeGame(tpl);
   }catch(e){
     $id('resExport').textContent='Generation failed: '+e.message;
@@ -696,13 +1461,18 @@ function renderExport(cfg){
 
 function update(){
   if($id('segAuto').checked){
-    const auto=$id('layout').value==='star'?1.5:1.0;
+    const auto=$id('layout').value==='star'?1.0:0.8;
     if(parseFloat($id('seg').value)!==auto) $id('seg').value=auto;
   }
   populateLayoutSub();
   let cfg=readCfg();
   if($id('nAuto').checked){
-    const maxN=maxFeasibleN(cfg);
+    let maxN=maxFeasibleN(cfg);
+    if(cfg.mode==='mining'){
+      // Keep daily surplus strictly positive: yield - (nFact * MINING_IN) > 0
+      const maxBySupply=Math.max(0, Math.floor((cfg.yield-1)/MINING_IN));
+      maxN=Math.min(maxN, maxBySupply);
+    }
     if(maxN>=0 && cfg.nFact!==maxN){
       $id('nFact').value=maxN;
       cfg=readCfg();
@@ -713,19 +1483,28 @@ function update(){
   populateFactoryProd();
   for(const id of ['upgEcu','upgTrunk','upgOther']) syncUpgOptions(id, ver.levels.length-1);
   const r=evaluate(cfg,false);
+  const tpl=getActiveTemplate(cfg);
   renderSummary(r);
   renderStatus(r);
   renderLinks(r, cfg);
   renderSupply(r, cfg);
   renderFactory(cfg);
+  renderTemplateSchema(tpl);
   renderMaxN(cfg);
-  renderExport(cfg);
+  renderExportTemplate(tpl);
   showHide(cfg);
 }
 
 /* ================= Event Binding ================= */
-const bindIds=['ccu','mode','tier','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
-for(const id of bindIds) $id(id).addEventListener('input',()=>{ update(); saveCalculatorState(); });
+const bindIds=['ccu','mode','tier','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','nEcu','nHead','yield','radius','layout','layoutSub','chainDepth','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
+function bindLiveUpdate(id){
+  const el=$id(id);
+  if(!el) return;
+  const handler=()=>{ update(); saveCalculatorState(); };
+  el.addEventListener('input',handler);
+  el.addEventListener('change',handler);
+}
+for(const id of bindIds) bindLiveUpdate(id);
 $id('btnExport').addEventListener('click',exportJSON);
 $id('btnCopy').addEventListener('click',copyJSON);
 $id('btnPaste').addEventListener('click',pasteJsonFromClipboard);
@@ -741,6 +1520,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   populateFactoryProd();
   restoreTheme();
   restoreCalculatorState();
+  applyTransferredJsonIfPresent();
   update();
   saveCalculatorState();
 });
