@@ -124,6 +124,11 @@
             <select id="layoutSub"></select>
             <div class="hint" id="layoutHint">Full Star: each factory links to storage+launchpad</div>
           </div>
+          <div class="row" id="chainDepthRow" style="display:none;">
+            <label>Chain Max Depth</label>
+            <input type="number" id="chainDepth" value="6" min="1" max="40" step="1">
+            <div class="hint">Numero massimo di fabbriche per catena lineare; oltre questo valore crea una nuova catena parallela.</div>
+          </div>
           <div class="row">
             <label>Link Segment Factor</label>
             <input type="number" id="seg" value="1.5" min="0.5" step="0.1">
@@ -186,6 +191,14 @@
             <summary>Template JSON Preview</summary>
             <pre id="resExport"></pre>
           </details>
+        </div>
+
+        <h2>Template Connection Schema</h2>
+        <div class="panel">
+          <div id="resTemplateSchema" class="template-schema-wrap">
+            <svg id="templateGraph" viewBox="0 0 980 560" role="img" aria-label="Schema connessioni del template"></svg>
+          </div>
+          <div id="resTemplateLegend" class="template-legend"></div>
         </div>
 
         <h2>Import &amp; Validate Template</h2>

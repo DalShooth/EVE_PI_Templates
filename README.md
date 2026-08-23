@@ -9,8 +9,10 @@ See the complete [P0 to P4 dependency schema](PLANETARY_DEPENDENCIES.md) for the
 - Select the `Command Center Upgrades` level from I to V before copying a configuration.
 - The selected theme and `Command Center Upgrades` level are saved in the browser and restored in later sessions.
 - Right-click a node to choose its JSON configuration file and copy the complete file contents.
+- Right-click a node to transfer its JSON directly to the Calculator page (`Transfer to Calculator`) and auto-load it for validation/apply.
 - The copied JSON is generated with `"CmdCtrLv"` set to the selected level; the repository files are not modified.
 - Miner nodes offer the available `00` and `LS` configurations. If direct local file access is blocked by the browser, use `Choose local JSON and copy` in the context menu.
+- Local files can also be imported with `Choose local JSON and transfer` from the same context menu.
 
 For automatic JSON loading and copying from Chrome, open the map through `https://` or a local server such as `http://localhost`; Chrome blocks `fetch` access to neighboring files when the HTML is opened directly with `file://`. The `Choose local JSON and copy` option works when using the HTML file directly.
 
