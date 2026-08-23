@@ -467,8 +467,8 @@ function buildMiningTemplate(cfg){
       const chain=fact.slice(cursor, cursor+(s.end-s.start));
       cursor+=chain.length;
       if(!chain.length) continue;
-      const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : (hubStor||hubLp||prevTail);
-      if(sourcePin) links.push({D:chain[0],Lv:0,S:sourcePin});
+      const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : (hubStor||hubLp||prevTail||chain[0]);
+      if(sourcePin && sourcePin!==chain[0]) links.push({D:chain[0],Lv:0,S:sourcePin});
       for(let i=0;i<chain.length-1;i++) links.push({D:chain[i+1],Lv:0,S:chain[i]});
       prevTail=chain[chain.length-1];
     }
@@ -624,8 +624,8 @@ function buildFactoryTemplate(cfg){
       const chain=fact.slice(cursor, cursor+(s.end-s.start));
       cursor+=chain.length;
       if(!chain.length) continue;
-      const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : (hubStor||hubLp||prevTail);
-      if(sourcePin) links.push({D:chain[0],Lv:0,S:sourcePin});
+      const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : (hubStor||hubLp||prevTail||chain[0]);
+      if(sourcePin && sourcePin!==chain[0]) links.push({D:chain[0],Lv:0,S:sourcePin});
       for(let i=0;i<chain.length-1;i++) links.push({D:chain[i+1],Lv:0,S:chain[i]});
 
       if(!isHub){
@@ -643,11 +643,11 @@ function buildFactoryTemplate(cfg){
         const chain=fact.slice(cursor, cursor+(s.end-s.start));
         cursor+=chain.length;
         if(!chain.length) continue;
-        const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : null;
+        const sourcePin=(isHub && prevTail && !hubStor && !hubLp) ? prevTail : (hubStor||hubLp||chain[0]);
         for(let i=0;i<chain.length;i++){
           const path=[];
           if(sourcePin) path.push(sourcePin);
-          if(!sourcePin){
+          if(!sourcePin || sourcePin===chain[0]){
             if(hubLp) path.push(hubLp);
             if(hubStor) path.push(hubStor);
             if(!hubStor && !hubLp) path.push(chain[0]);
@@ -1310,6 +1310,15 @@ function renderTemplateSchema(tpl){
   let dragIdx=null;
   let dragging=false;
   let lockedNode=null;
+  let exportRaf=0;
+
+  function scheduleExportUpdate(){
+    if(exportRaf) return;
+    exportRaf=requestAnimationFrame(()=>{
+      exportRaf=0;
+      renderExportTemplate(tpl);
+    });
+  }
 
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
   function clientToSvg(clientX, clientY){
@@ -1387,13 +1396,14 @@ function renderTemplateSchema(tpl){
       const pin=tpl.P[Number(dragIdx)-1];
       if(pin){ pin.La=+geo.la.toFixed(5); pin.Lo=+geo.lo.toFixed(5); }
       storeManualOverridesFromTemplate(tpl);
-      renderExportTemplate(tpl);
+      scheduleExportUpdate();
     });
     n.addEventListener('pointerup',(ev)=>{
       if(dragIdx===n.dataset.idx){
         dragging=false;
         dragIdx=null;
         n.releasePointerCapture?.(ev.pointerId);
+        renderExportTemplate(tpl);
       }
     });
     n.addEventListener('pointercancel',(ev)=>{
@@ -1401,6 +1411,7 @@ function renderTemplateSchema(tpl){
         dragging=false;
         dragIdx=null;
         n.releasePointerCapture?.(ev.pointerId);
+        renderExportTemplate(tpl);
       }
     });
     n.addEventListener('mouseenter',()=>{ if(!lockedNode) applyHighlight(n.dataset.idx); });
@@ -1423,11 +1434,11 @@ function renderTemplateSchema(tpl){
     `<span class="template-legend-item">Pins: ${tpl.P.length}</span><span class="template-legend-item">Links: ${tpl.L.length}</span>`;
 }
 
-function maxFeasibleN(cfg){
+function maxFeasibleN(cfg, autoUpg=false){
   let best=-1;
   for(let N=0;N<=40;N++){
     const c2={...cfg, nFact:N};
-    const r=evaluate(c2,true);
+    const r=evaluate(c2,autoUpg);
     if(r.cpuOk&&r.pgOk) best=N; else break;
   }
   return best;
@@ -1436,7 +1447,7 @@ function maxFeasibleN(cfg){
 function renderMaxN(cfg){
   const rows=[];
   for(let c=0;c<=5;c++){
-    const best=maxFeasibleN({...cfg, ccu:c});
+    const best=maxFeasibleN({...cfg, ccu:c}, false);
     rows.push({ccu:c, max:best});
   }
   let h=`<tr><th>CCU</th><th>Budget CPU</th><th>Budget PG</th><th>Max N</th></tr>`;
@@ -1467,7 +1478,7 @@ function update(){
   populateLayoutSub();
   let cfg=readCfg();
   if($id('nAuto').checked){
-    let maxN=maxFeasibleN(cfg);
+    let maxN=maxFeasibleN(cfg,false);
     if(cfg.mode==='mining'){
       // Keep daily surplus strictly positive: yield - (nFact * MINING_IN) > 0
       const maxBySupply=Math.max(0, Math.floor((cfg.yield-1)/MINING_IN));
