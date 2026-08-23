@@ -1,6 +1,30 @@
 ## EVE PI Templates
 Complete set of PI templates for EVE Online. The design strategy is to mine your P0 and tier it up to P1. Then take your P1 and ship it to P2/P3/P4 factories to efficiently produce PI with the least amount of headache as possible. You will find there isn't a mining template for every planets for every type. This is expected as CCP designed the system to auto switch the planet specific structures to the planet your trying to place the template on. Barring the minable material is available on said planet.
 
+See the complete [P0 to P4 dependency schema](PLANETARY_DEPENDENCIES.md) for the commodity production chains, or open the [interactive dependency map](frontend/index.html) in a browser.
+
+### Interactive dependency map
+- Click any P0, P1, P2, P3, or P4 node to highlight its complete dependency chain.
+- The map expands all planets associated with the P0 resources in the selected chain on the left.
+- Select the `Command Center Upgrades` level from I to V before copying a configuration.
+- The selected theme and `Command Center Upgrades` level are saved in the browser and restored in later sessions.
+- Right-click a node to choose its JSON configuration file and copy the complete file contents.
+- Right-click a node to transfer its JSON directly to the Calculator page (`Transfer to Calculator`) and auto-load it for validation/apply.
+- The copied JSON is generated with `"CmdCtrLv"` set to the selected level; the repository files are not modified.
+- Miner nodes offer the available `00` and `LS` configurations. If direct local file access is blocked by the browser, use `Choose local JSON and copy` in the context menu.
+- Local files can also be imported with `Choose local JSON and transfer` from the same context menu.
+
+For automatic JSON loading and copying from Chrome, open the map through `https://` or a local server such as `http://localhost`; Chrome blocks `fetch` access to neighboring files when the HTML is opened directly with `file://`. The `Choose local JSON and copy` option works when using the HTML file directly.
+
+To run the map locally with Chrome:
+1. Open PowerShell in the repository root.
+2. Start a local server:
+   ```powershell
+   python server/server.py
+   ```
+3. Open [http://localhost:8000/frontend/](http://localhost:8000/frontend/).
+4. Right-click a node and select `Copy JSON` to copy its configuration contents.
+
 Screenshots from left to right. 
 
 00 Miners + P1 Factories (All Planets), Lowsec Miners + P1 Factories (All Planets)
@@ -19,8 +43,13 @@ P2/P3 Factories (All Planets), P4 Factories (Barren/Temperate Planets)
 ### How to use these templates.
 1. Navigate to `/users/<user>/Documents/EVE/PlanetaryInteractionTemplates`
    -  Onedrive: `/users/<user>/OneDrive/Documents/EVE/PlanetaryInteractionTemplates`
-3. Unzip and paste all json files in the folder above.
+3. Copy all JSON files from the `Factory/P2`, `Factory/P3`, `Factory/P4`, `Miner/00`, and `Miner/LS` subfolders into the folder above. EVE does not load templates from nested folders.
 4. Refresh your templates menu in game.
+
+The Factory templates are grouped by Planetary Industry tier:
+- `Factory/P2`: Refined Commodities, produced in Advanced Industry Facilities.
+- `Factory/P3`: Specialized Commodities, produced in Advanced Industry Facilities.
+- `Factory/P4`: Advanced Commodities, produced in High-Tech Production Plants.
 
 ### Skill Recommendations
 | Skill Names | Miner | Factory |
