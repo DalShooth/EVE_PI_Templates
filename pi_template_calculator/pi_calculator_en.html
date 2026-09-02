@@ -333,6 +333,7 @@ const TIERS = {
         note:'18 P3/h → 1 P4/h (each input needs 2 P3 factories feeding it; Barren/Temperate only)'},
 };
 const MINING_IN=144000, MINING_OUT=960;
+const FILL_HOURS=12;   // target fill window: move the D-day buffer into storage within 12h
 
 /* ================= Export data (from repo templates/ESI) ================= */
 const PLANETS={
@@ -527,7 +528,8 @@ function buildFactoryTemplate(cfg){
   const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:+la.toFixed(5), Lo:+lo.toFixed(5), S:s, T:t}); return pins.length; };
   const la0=1.5708, lo0=1.0;
   const lp=[],stor=[],fact=[];
-  const stLp=(s,l)=>{ for(const a of stor){ for(const b of lp){ links.push({D:b,Lv:0,S:a}); } } };
+  const lvTrunk=Math.min(cfg.upgTrunk, cfg.ver.levels.length-1);
+  const stLp=()=>{ for(const a of stor){ for(const b of lp){ links.push({D:b,Lv:lvTrunk,S:a}); } } };
   if(sub==='full' || sub==='semistar'){
     // Launchpad hub: launchpad centered, one link per factory
     for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,lo0,null,pl.lp));
@@ -535,6 +537,7 @@ function buildFactoryTemplate(cfg){
     for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,ringRho(cfg,cfg.nFact), Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,prod.id,struct)); }
     for(let i=0;i<fact.length;i++) links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]});
     stLp();
+    if(cfg.nStor>0) for(let i=0;i<fact.length;i++){ const s=stor[i%stor.length]; if(s) links.push({S:s,D:fact[i],Lv:0}); }
     for(const [inId,inQ] of prod.in){
       for(let i=0;i<fact.length;i++){
         const l=lp[i%Math.max(lp.length,1)], s=stor[i%Math.max(stor.length,1)];
@@ -545,7 +548,7 @@ function buildFactoryTemplate(cfg){
     }
     for(let i=0;i<fact.length;i++) routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]],Q:prod.outQ,T:prod.id});
   }else if(sub==='hub'){
-    // Launchpad hub + paired factories
+    // Launchpad hub + paired factories; with buffer storage, input goes through storage
     const line=cfg.layout==='chain';
     if(line){
       let cur=lo0-0.026;
@@ -566,7 +569,16 @@ function buildFactoryTemplate(cfg){
     }
     stLp();
     const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
-    for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)]; if(l&&fact[2*k]) links.push({D:fact[2*k],Lv:0,S:l}); if(k<S&&fact[2*k+1]) links.push({D:fact[2*k+1],Lv:0,S:fact[2*k]}); }
+    // output: primary→launchpad
+    for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)]; if(l&&fact[2*k]) links.push({D:l,Lv:0,S:fact[2*k]}); }
+    // input: via storage (if any) else launchpad
+    if(cfg.nStor>0){
+      for(let k=0;k<P;k++){ const s=stor[k%Math.max(stor.length,1)]; if(s&&fact[2*k]) links.push({D:fact[2*k],Lv:0,S:s}); }
+    }else{
+      for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)]; if(l&&fact[2*k]) links.push({D:fact[2*k],Lv:0,S:l}); }
+    }
+    // primary→secondary (input relay)
+    for(let k=0;k<S;k++){ if(fact[2*k+1]) links.push({D:fact[2*k+1],Lv:0,S:fact[2*k]}); }
     for(const [inId,inQ] of prod.in){
       for(let k=0;k<P;k++){
         const l=lp[k%Math.max(lp.length,1)], s=stor[k%Math.max(stor.length,1)];
@@ -587,7 +599,8 @@ function buildFactoryTemplate(cfg){
     if(lp0&&fact.length) links.push({D:fact[0],Lv:0,S:lp0});
     for(let i=0;i<fact.length-1;i++) links.push({D:fact[i+1],Lv:0,S:fact[i]});
     if(fact.length&&lp0) links.push({D:lp0,Lv:0,S:fact[fact.length-1]});
-    if(st0&&lp0) links.push({D:lp0,Lv:0,S:st0});
+    if(st0&&lp0) links.push({D:lp0,Lv:lvTrunk,S:st0});
+    if(st0&&fact.length) links.push({D:fact[0],Lv:0,S:st0});
     for(const [inId,inQ] of prod.in){
       for(let i=0;i<fact.length;i++){
         if(lp0){ const via=st0?[lp0,st0].concat(fact.slice(0,i+1)):[lp0].concat(fact.slice(0,i+1));
@@ -716,6 +729,19 @@ function bufferNeed(cfg,N){
   const outDays=N*f.outM3>0?A/(N*f.outM3):Infinity;
   return {f:f, A:A, need:need, Sneed:Sneed, inDays:inDays, outDays:outDays};
 }
+/* Fill: each launchpad↔storage link must move D-day input in FILL_HOURS (m³/h) */
+function fillM3PerLink(cfg){
+  if(!cfg.nStor||!cfg.days) return 0;
+  const t=TIERS[cfg.tier];
+  return cfg.nFact*t.in*cfg[t.inV]*cfg.days/(cfg.nStor*FILL_HOURS);
+}
+function bufferLv(cfg){ return cfg.nStor>0? suggestLevel(cfg.ver, fillM3PerLink(cfg)) : 0; }
+function fillHoursAt(cfg,lv){
+  if(!cfg.nStor||!cfg.days) return 0;
+  const t=TIERS[cfg.tier];
+  const batch=cfg.nFact*t.in*cfg[t.inV]*cfg.days;
+  return batch/(cfg.nStor*cfg.ver.levels[lv].cap);
+}
 
 /* ================= Link Groups ================= */
 function buildLinkGroups(cfg){
@@ -743,18 +769,41 @@ function buildLinkGroups(cfg){
     }
   }else{
     const t=TIERS[cfg.tier];
-    const m3=(units,vol)=>units*vol/24;                       // m³/h per factory input or output
-    const m3io=m3(t.in,cfg[t.inV])+m3(t.out,cfg[t.outV]);     // combined input+output m³/h per factory
+    const m3i=t.in*cfg[t.inV]/24, m3o=t.out*cfg[t.outV]/24;   // per-factory input/output m³/h
+    const m3io=m3i+m3o;
+    const hasBuf=cfg.nStor>0;
+    // fill flow: D-day input moved through S launchpad↔storage links in FILL_HOURS
+    const fillM3=hasBuf? cfg.nFact*t.in*cfg[t.inV]*cfg.days/(cfg.nStor*FILL_HOURS) : 0;
     if(isFull || isSemi){
-      g.push({name:'Factory↔Launchpad', count:cfg.nFact, reqM3:m3io, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
-      if(cfg.nStor>0) g.push({name:'Launchpad↔Storage (buffer)', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
+      if(hasBuf){
+        g.push({name:'Launchpad↔Storage (fill)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
+        g.push({name:'Storage→Factory (input)', count:cfg.nFact, reqM3:m3i, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+        g.push({name:'Factory→Launchpad (output)', count:cfg.nFact, reqM3:m3o, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+      }else{
+        g.push({name:'Factory↔Launchpad', count:cfg.nFact, reqM3:m3io, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+      }
     }else if(isHub){
-      if(cfg.nFact>0) g.push({name:'Launchpad→Primary', count:Math.ceil(cfg.nFact/2), reqM3:2*m3io, level:'upgTrunk', len:ringLenKm(cfg,Math.ceil(cfg.nFact/2))});
-      if(cfg.nFact>1) g.push({name:'Primary→Secondary', count:Math.floor(cfg.nFact/2), reqM3:m3io, level:'upgOther', len:0.012008578*cfg.radius});
+      const P=Math.ceil(cfg.nFact/2);
+      if(hasBuf){
+        g.push({name:'Launchpad↔Storage (fill)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
+        if(cfg.nFact>0) g.push({name:'Storage→Primary (input)', count:P, reqM3:2*m3i, level:'upgOther', len:ringLenKm(cfg,P)});
+        if(cfg.nFact>1) g.push({name:'Primary→Secondary (input)', count:Math.floor(cfg.nFact/2), reqM3:m3i, level:'upgOther', len:0.012008578*cfg.radius});
+        g.push({name:'Factory→Launchpad (output)', count:cfg.nFact, reqM3:m3o, level:'upgOther', len:ringLenKm(cfg,P)});
+      }else{
+        if(cfg.nFact>0) g.push({name:'Launchpad→Primary', count:P, reqM3:2*m3io, level:'upgTrunk', len:ringLenKm(cfg,P)});
+        if(cfg.nFact>1) g.push({name:'Primary→Secondary', count:Math.floor(cfg.nFact/2), reqM3:m3io, level:'upgOther', len:0.012008578*cfg.radius});
+      }
     }else{ // serial
-      g.push({name:'Launchpad→f1 (trunk)', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
-      if(cfg.nFact>1) g.push({name:'Chain relay f_i→f_i+1', count:cfg.nFact-1, reqM3:(cfg.nFact-1)*m3io, level:'upgTrunk'});
-      g.push({name:'Last Factory→Launchpad', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
+      if(hasBuf){
+        g.push({name:'Launchpad↔Storage (fill)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
+        g.push({name:'Storage→f1 (input trunk)', count:1, reqM3:cfg.nFact*m3i, level:'upgTrunk'});
+        if(cfg.nFact>1) g.push({name:'Chain relay f_i→f_i+1', count:cfg.nFact-1, reqM3:(cfg.nFact-1)*m3i, level:'upgTrunk'});
+        g.push({name:'Last Factory→Launchpad (output)', count:1, reqM3:cfg.nFact*m3o, level:'upgTrunk'});
+      }else{
+        g.push({name:'Launchpad→f1 (trunk)', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
+        if(cfg.nFact>1) g.push({name:'Chain relay f_i→f_i+1', count:cfg.nFact-1, reqM3:(cfg.nFact-1)*m3io, level:'upgTrunk'});
+        g.push({name:'Last Factory→Launchpad', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
+      }
     }
   }
   return g;
@@ -836,15 +885,21 @@ function update(){
     }
   }
   $id('nFact').disabled=$id('nAuto').checked;
-  // factory buffer auto-fit: when D>1 and auto on, sync storage count to what D days require
+  // factory buffer auto-fit: when D>1 and auto on, sync storage to D-day need and upgTrunk to fill level
   if(cfg.mode==='factory' && cfg.days>1 && cfg.dAuto){
     const Sneed=bufferNeed(cfg,cfg.nFact).Sneed;
     if($id('nStor').value!=Sneed){
       $id('nStor').value=Sneed;
       cfg=readCfg();
     }
+    const bl=bufferLv(cfg);
+    if(parseInt($id('upgTrunk').value,10)!==bl){
+      $id('upgTrunk').value=bl;
+      cfg=readCfg();
+    }
   }
   $id('nStor').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
+  $id('upgTrunk').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
   const ver=cfg.ver;
   populateFactoryProd();
   // upgrade level dropdown max
@@ -880,8 +935,9 @@ function showHide(cfg){
   $id('resFactory').style.display=cfg.mode==='factory'?'':'none';
   $id('resBufHead').style.display=cfg.mode==='factory'?'':'none';
   $id('resBuf').style.display=cfg.mode==='factory'?'':'none';
-  // storage is locked when factory + D>1 + auto buffer
+  // storage and trunk links are locked when factory + D>1 + auto buffer
   $id('nStor').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
+  $id('upgTrunk').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
 }
 function statusTag(ok){
   return ok?'<span class="tag tag-ok">OK</span>':'<span class="tag tag-bad">Over</span>';
@@ -974,6 +1030,14 @@ function renderBuffer(cfg){
   h+=`<tr><td class="l">Output buffer lasts</td><td class="mono">${fmt1(b.outDays)} days</td></tr>`;
   h+=`<tr><td class="l">Requirement R (N×max×D=${cfg.days})</td><td class="mono">${fmt(b.need)} m³</td></tr>`;
   h+=`<tr><td class="l">Storage needed to meet / short</td><td class="mono">${b.Sneed} / ${more}</td></tr>`;
+  if(cfg.nStor>0){
+    const fill=fillM3PerLink(cfg);
+    const lv=bufferLv(cfg);
+    const curLv=cfg.days>1&&cfg.dAuto?lv:Math.min(parseInt($id('upgTrunk').value,10)||0, cfg.ver.levels.length-1);
+    const hrs=fillHoursAt(cfg,curLv);
+    h+=`<tr><td class="l">Fill per link (D days÷${FILL_HOURS}h÷${cfg.nStor} storage)</td><td class="mono">${fmt1(fill)} m³/h → suggest Lv ${lv}</td></tr>`;
+    h+=`<tr><td class="l">Time to fill at Lv ${curLv}</td><td class="mono">${fmt1(hrs)} h ${hrs>FILL_HOURS?'<span class="tag tag-warn">over target</span>':'<span class="tag tag-ok">OK</span>'}</td></tr>`;
+  }
   h+=`<tr><td class="l">Maintenance interval</td><td>${fits?'<span class="tag tag-ok">Covers '+cfg.days+' days</span>':'<span class="tag tag-bad">Insufficient — runs out within D days</span>'}</td></tr>`;
   h+=`</table>`;
   $id('resBuf').innerHTML=h;
@@ -982,10 +1046,16 @@ function maxFeasibleN(cfg){
   let best=-1;
   for(let N=0;N<=40;N++){
     const c2={...cfg, nFact:N};
-    // factory + D>1 + auto buffer: storage count = needed for D days
-    if(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto) c2.nStor=bufferNeed(cfg,N).Sneed;
-    const r=evaluate(c2,true);
-    if(r.cpuOk&&r.pgOk) best=N; else break;
+    if(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto){
+      // D-buffer mode: storage = Sneed, single upgTrunk = bufferLv (consistent with display/export)
+      c2.nStor=bufferNeed(cfg,N).Sneed;
+      c2.upgTrunk=bufferLv(c2);
+      const r=evaluate(c2,false);
+      if(r.cpuOk&&r.pgOk) best=N; else break;
+    }else{
+      const r=evaluate(c2,true);
+      if(r.cpuOk&&r.pgOk) best=N; else break;
+    }
   }
   return best;
 }
