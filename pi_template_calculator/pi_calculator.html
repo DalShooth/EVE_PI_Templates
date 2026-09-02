@@ -541,9 +541,8 @@ function buildFactoryTemplate(cfg){
     for(const [inId,inQ] of prod.in){
       for(let i=0;i<fact.length;i++){
         const l=lp[i%Math.max(lp.length,1)], s=stor[i%Math.max(stor.length,1)];
-        const via=(s&&l)?[s,fact[i]]:[fact[i]];
-        if(s&&l) routes.push({P:[l,s],Q:inQ,T:inId});
-        routes.push({P:[l].concat(via),Q:inQ,T:inId});
+        if(s) routes.push({P:[s,fact[i]],Q:inQ,T:inId});   // 仓库→工厂（缓冲供料，合法）
+        else if(l) routes.push({P:[l,fact[i]],Q:inQ,T:inId});  // 发射台→工厂直连
       }
     }
     for(let i=0;i<fact.length;i++) routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]],Q:prod.outQ,T:prod.id});
@@ -583,9 +582,13 @@ function buildFactoryTemplate(cfg){
     for(const [inId,inQ] of prod.in){
       for(let k=0;k<P;k++){
         const l=lp[k%Math.max(lp.length,1)], s=stor[k%Math.max(stor.length,1)];
-        if(l&&s) routes.push({P:[l,s],Q:inQ,T:inId});
-        if(l&&fact[2*k]) routes.push({P:[l].concat(s?[s]:[]).concat([fact[2*k]]),Q:inQ,T:inId});
-        if(l&&fact[2*k+1]) routes.push({P:[l].concat(s?[s]:[]).concat([fact[2*k],fact[2*k+1]]),Q:inQ,T:inId});
+        if(s){
+          if(s&&fact[2*k]) routes.push({P:[s,fact[2*k]],Q:inQ,T:inId});                       // 仓库→主干厂
+          if(s&&fact[2*k+1]) routes.push({P:[s,fact[2*k],fact[2*k+1]],Q:inQ,T:inId});        // 仓库→主干→支线
+        }else if(l){
+          if(l&&fact[2*k]) routes.push({P:[l,fact[2*k]],Q:inQ,T:inId});
+          if(l&&fact[2*k+1]) routes.push({P:[l,fact[2*k],fact[2*k+1]],Q:inQ,T:inId});
+        }
       }
     }
     for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)];
@@ -604,8 +607,8 @@ function buildFactoryTemplate(cfg){
     if(st0&&fact.length) links.push({D:fact[0],Lv:0,S:st0});
     for(const [inId,inQ] of prod.in){
       for(let i=0;i<fact.length;i++){
-        if(lp0){ const via=st0?[lp0,st0].concat(fact.slice(0,i+1)):[lp0].concat(fact.slice(0,i+1));
-          routes.push({P:via,Q:inQ,T:inId}); }
+        if(st0) routes.push({P:[st0].concat(fact.slice(0,i+1)),Q:inQ,T:inId});          // 仓库→f1→…→fi
+        else if(lp0) routes.push({P:[lp0].concat(fact.slice(0,i+1)),Q:inQ,T:inId});     // 发射台→f1→…→fi
       }
     }
     for(let i=0;i<fact.length;i++){ if(lp0) routes.push({P:[fact[i]].concat(fact.slice(i+1)).concat([lp0]),Q:prod.outQ,T:prod.id}); }
@@ -1035,8 +1038,9 @@ function renderBuffer(cfg){
     const lv=bufferLv(cfg);
     const curLv=cfg.days>1&&cfg.dAuto?lv:Math.min(parseInt($id('upgTrunk').value,10)||0, cfg.ver.levels.length-1);
     const hrs=fillHoursAt(cfg,curLv);
-    h+=`<tr><td class="l">填仓流量/条（D 天÷${FILL_HOURS}h÷${cfg.nStor}仓）</td><td class="mono">${fmt1(fill)} m³/h → 建议升 Lv ${lv}</td></tr>`;
-    h+=`<tr><td class="l">当前 Lv ${curLv} 填满约需</td><td class="mono">${fmt1(hrs)} 小时 ${hrs>FILL_HOURS?'<span class="tag tag-warn">超目标</span>':'<span class="tag tag-ok">达标</span>'}</td></tr>`;
+    h+=`<tr><td class="l">快捷传输流量/条（D 天÷${FILL_HOURS}h÷${cfg.nStor}仓）</td><td class="mono">${fmt1(fill)} m³/h → 建议升 Lv ${lv}</td></tr>`;
+    h+=`<tr><td class="l">当前 Lv ${curLv} 装满约需</td><td class="mono">${fmt1(hrs)} 小时 ${hrs>FILL_HOURS?'<span class="tag tag-warn">偏慢</span>':'<span class="tag tag-ok">达标</span>'}</td></tr>`;
+    h+=`<tr><td class="l" colspan="2" style="text-align:left;font-size:12px;color:#57606a;">⚠ 发射台与仓库间不能建路由，须用<b>快捷传输</b>补货：导入 P1/P2/P3 到发射台 → 快捷传输到仓库（每次有冷却，链路 Lv 越高越快）。仓库→工厂路由已配好，自动喂厂。</td></tr>`;
   }
   h+=`<tr><td class="l">维护周期可行性</td><td>${fits?'<span class="tag tag-ok">满足 '+cfg.days+' 天</span>':'<span class="tag tag-bad">不足，D 天内会断供</span>'}</td></tr>`;
   h+=`</table>`;

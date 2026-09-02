@@ -541,9 +541,8 @@ function buildFactoryTemplate(cfg){
     for(const [inId,inQ] of prod.in){
       for(let i=0;i<fact.length;i++){
         const l=lp[i%Math.max(lp.length,1)], s=stor[i%Math.max(stor.length,1)];
-        const via=(s&&l)?[s,fact[i]]:[fact[i]];
-        if(s&&l) routes.push({P:[l,s],Q:inQ,T:inId});
-        routes.push({P:[l].concat(via),Q:inQ,T:inId});
+        if(s) routes.push({P:[s,fact[i]],Q:inQ,T:inId});            // storage→factory (buffer feed, valid)
+        else if(l) routes.push({P:[l,fact[i]],Q:inQ,T:inId});       // launchpad→factory direct
       }
     }
     for(let i=0;i<fact.length;i++) routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]],Q:prod.outQ,T:prod.id});
@@ -582,9 +581,13 @@ function buildFactoryTemplate(cfg){
     for(const [inId,inQ] of prod.in){
       for(let k=0;k<P;k++){
         const l=lp[k%Math.max(lp.length,1)], s=stor[k%Math.max(stor.length,1)];
-        if(l&&s) routes.push({P:[l,s],Q:inQ,T:inId});
-        if(l&&fact[2*k]) routes.push({P:[l].concat(s?[s]:[]).concat([fact[2*k]]),Q:inQ,T:inId});
-        if(l&&fact[2*k+1]) routes.push({P:[l].concat(s?[s]:[]).concat([fact[2*k],fact[2*k+1]]),Q:inQ,T:inId});
+        if(s){
+          if(s&&fact[2*k]) routes.push({P:[s,fact[2*k]],Q:inQ,T:inId});                    // storage→primary
+          if(s&&fact[2*k+1]) routes.push({P:[s,fact[2*k],fact[2*k+1]],Q:inQ,T:inId});     // storage→primary→secondary
+        }else if(l){
+          if(l&&fact[2*k]) routes.push({P:[l,fact[2*k]],Q:inQ,T:inId});
+          if(l&&fact[2*k+1]) routes.push({P:[l,fact[2*k],fact[2*k+1]],Q:inQ,T:inId});
+        }
       }
     }
     for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)];
@@ -603,8 +606,8 @@ function buildFactoryTemplate(cfg){
     if(st0&&fact.length) links.push({D:fact[0],Lv:0,S:st0});
     for(const [inId,inQ] of prod.in){
       for(let i=0;i<fact.length;i++){
-        if(lp0){ const via=st0?[lp0,st0].concat(fact.slice(0,i+1)):[lp0].concat(fact.slice(0,i+1));
-          routes.push({P:via,Q:inQ,T:inId}); }
+        if(st0) routes.push({P:[st0].concat(fact.slice(0,i+1)),Q:inQ,T:inId});        // storage→f1→…→fi
+        else if(lp0) routes.push({P:[lp0].concat(fact.slice(0,i+1)),Q:inQ,T:inId});   // launchpad→f1→…→fi
       }
     }
     for(let i=0;i<fact.length;i++){ if(lp0) routes.push({P:[fact[i]].concat(fact.slice(i+1)).concat([lp0]),Q:prod.outQ,T:prod.id}); }
@@ -1035,8 +1038,9 @@ function renderBuffer(cfg){
     const lv=bufferLv(cfg);
     const curLv=cfg.days>1&&cfg.dAuto?lv:Math.min(parseInt($id('upgTrunk').value,10)||0, cfg.ver.levels.length-1);
     const hrs=fillHoursAt(cfg,curLv);
-    h+=`<tr><td class="l">Fill per link (D days÷${FILL_HOURS}h÷${cfg.nStor} storage)</td><td class="mono">${fmt1(fill)} m³/h → suggest Lv ${lv}</td></tr>`;
-    h+=`<tr><td class="l">Time to fill at Lv ${curLv}</td><td class="mono">${fmt1(hrs)} h ${hrs>FILL_HOURS?'<span class="tag tag-warn">over target</span>':'<span class="tag tag-ok">OK</span>'}</td></tr>`;
+    h+=`<tr><td class="l">Expedited-transfer rate/link (D days÷${FILL_HOURS}h÷${cfg.nStor} storage)</td><td class="mono">${fmt1(fill)} m³/h → suggest Lv ${lv}</td></tr>`;
+    h+=`<tr><td class="l">Time to fill at Lv ${curLv}</td><td class="mono">${fmt1(hrs)} h ${hrs>FILL_HOURS?'<span class="tag tag-warn">slow</span>':'<span class="tag tag-ok">OK</span>'}</td></tr>`;
+    h+=`<tr><td class="l" colspan="2" style="text-align:left;font-size:12px;color:#57606a;">⚠ No route is possible between launchpad and storage — refill via <b>Expedited Transfer</b>: import P1/P2/P3 to the launchpad, then expedite-transfer to storage (each transfer has a cooldown; higher link Lv = faster). Storage→factory routes are pre-configured.</td></tr>`;
   }
   h+=`<tr><td class="l">Maintenance interval</td><td>${fits?'<span class="tag tag-ok">Covers '+cfg.days+' days</span>':'<span class="tag tag-bad">Insufficient — runs out within D days</span>'}</td></tr>`;
   h+=`</table>`;
