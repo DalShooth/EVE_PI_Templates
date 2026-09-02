@@ -79,6 +79,14 @@
           <select id="factoryProd"></select>
           <div class="hint">按加工层级过滤的产物列表</div>
         </div>
+        <div class="row" id="fModeRow" style="display:none;">
+          <label>工厂模式</label>
+          <select id="fMode">
+            <option value="eff" selected>效率模式（单发射台）</option>
+            <option value="long">长维护模式（每输入类型 1 发射台）</option>
+          </select>
+          <div class="hint">效率：1 台全厂直接供料（满台约 1 天）；长维护：每种输入独享 1 台、满台可撑数天（发射台贵，厂数略降）</div>
+        </div>
         <div class="row">
           <label>工厂数量 N</label>
           <input type="number" id="nFact" value="8" min="0" max="40" step="1">
@@ -87,23 +95,15 @@
           <label><input type="checkbox" id="nAuto" checked style="flex:0; width:auto; min-width:0;"> 工厂数自动适配 CCU/配置</label>
           <div class="hint">开：N 始终=当前 CCU/拓扑/半径下结构可行最大值（改 CCU 自动升降）；关：手动输入</div>
         </div>
-        <div class="row">
+        <div class="row" id="storRow">
           <label>仓库数 S（采集器→工厂 P0 缓冲）</label>
           <input type="number" id="nStor" value="1" min="0" max="20" step="1">
-          <div class="hint">防采集量大时工厂处理不过来而溢出；默认 1 个足够。发射台自带 10,000 m³ 仓储，计入缓冲估算（因装载 P1 产出实际略打折）</div>
+          <div class="hint">矿点专用；防采集量大时工厂处理不过来而溢出。发射台自带 10,000 m³ 计入缓冲</div>
         </div>
-        <div class="row">
-          <label>发射台数量 L</label>
+        <div class="row" id="lpadRow">
+          <label>发射台数量 L（矿点）</label>
           <input type="number" id="nLpad" value="1" min="1" max="10" step="1">
-        </div>
-        <div class="row" id="daysRow" style="display:none;">
-          <label>维护周期 D（天）</label>
-          <input type="number" id="daysMain" value="1" min="1" max="30" step="1">
-          <div class="hint">两次补货间隔；D&gt;1 时输入/输出缓冲需撑满 D 天</div>
-        </div>
-        <div class="row" id="dAutoRow" style="display:none;">
-          <label><input type="checkbox" id="dAuto" checked style="flex:0; width:auto; min-width:0;"> 按 D 自动配缓冲</label>
-          <div class="hint">开：自动加仓库撑 D 天并相应降厂数；关：只展示建议不调整</div>
+          <div class="hint">矿点模式手动；工厂模式发射台数由所选模式决定</div>
         </div>
       </div>
 
@@ -243,7 +243,7 @@
       <h2 id="resFactoryHead">工厂日吞吐</h2>
       <div class="panel" id="resFactory"></div>
 
-      <h2 id="resBufHead">缓冲评估（维护周期）</h2>
+      <h2 id="resBufHead">免维护评估（发射台阵列）</h2>
       <div class="panel" id="resBuf"></div>
 
       <h2>链路吞吐瓶颈检测</h2>
@@ -333,7 +333,6 @@ const TIERS = {
         note:'18 P3/h → 1 P4/h（每输入需 2 个 P3 厂供给；仅荒芜/温带）'},
 };
 const MINING_IN=144000, MINING_OUT=960;
-const FILL_HOURS=12;   // 目标填仓窗口：D 天缓冲在 12h 内搬入仓库
 
 /* ================= 导出数据（从仓库模板/ESI 提取） ================= */
 const PLANETS={
@@ -527,94 +526,39 @@ function buildFactoryTemplate(cfg){
   const pins=[], links=[], routes=[];
   const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:+la.toFixed(5), Lo:+lo.toFixed(5), S:s, T:t}); return pins.length; };
   const la0=1.5708, lo0=1.0;
-  const lp=[],stor=[],fact=[];
-  const lvTrunk=Math.min(cfg.upgTrunk, cfg.ver.levels.length-1);
-  const stLp=()=>{ for(const a of stor){ for(const b of lp){ links.push({D:b,Lv:lvTrunk,S:a}); } } };
-  if(sub==='full' || sub==='semistar'){
-    // 发射台枢纽：发射台居中，每厂 1 链路直连；有缓冲仓库时输入经仓库
-    for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,lo0,null,pl.lp));
-    for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/Math.max(cfg.nStor,1)); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
-    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,ringRho(cfg,cfg.nFact), Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,prod.id,struct)); }
-    for(let i=0;i<fact.length;i++) links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]});
-    stLp();
-    if(cfg.nStor>0) for(let i=0;i<fact.length;i++){ const s=stor[i%stor.length]; if(s) links.push({S:s,D:fact[i],Lv:0}); }
-    for(const [inId,inQ] of prod.in){
-      for(let i=0;i<fact.length;i++){
-        const l=lp[i%Math.max(lp.length,1)], s=stor[i%Math.max(stor.length,1)];
-        if(s) routes.push({P:[s,fact[i]],Q:inQ,T:inId});   // 仓库→工厂（缓冲供料，合法）
-        else if(l) routes.push({P:[l,fact[i]],Q:inQ,T:inId});  // 发射台→工厂直连
-      }
-    }
-    for(let i=0;i<fact.length;i++) routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]],Q:prod.outQ,T:prod.id});
-  }else if(sub==='hub'){
-    // 发射台枢纽 + 工厂成对；有缓冲仓库时输入经仓库
-    const line=cfg.layout==='chain';
-    if(line){
-      let cur=lo0-0.026;
-      for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=0.013;
-      for(let i=0;i<cfg.nStor;i++) stor.push(addPin(la0,cur,null,pl.stor)), cur+=0.013;
-      const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
-      for(let k=0;k<P;k++){ fact.push(addPin(la0,cur,prod.id,struct)); cur+=0.013; if(k<S){ fact.push(addPin(la0,cur,prod.id,struct)); cur+=0.013; } }
-    }else{
-      for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,lo0,null,pl.lp));
-      for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/Math.max(cfg.nStor,1)); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
-      const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
-      const rhoP=ringRho(cfg,P);
-      for(let k=0;k<P;k++){
-        const th=Math.PI/2 + 2*Math.PI*k/Math.max(P,1);
-        const p=polar(la0,lo0,rhoP,th); fact.push(addPin(p.la,p.lo,prod.id,struct));
-        if(k<S){ const q=polar(la0,lo0,rhoP+0.012008578,th); fact.push(addPin(q.la,q.lo,prod.id,struct)); }
-      }
-    }
-    stLp();
-    const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
-    // 输入：发射台→仓库→主干→支线；输出：厂→发射台
-    // 输出：primary→launchpad（所有厂输出经此）
-    for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)]; if(l&&fact[2*k]) links.push({D:l,Lv:0,S:fact[2*k]}); }
-    // 输入：有缓冲走 storage→primary，否则 launchpad→primary
-    if(cfg.nStor>0){
-      for(let k=0;k<P;k++){ const s=stor[k%Math.max(stor.length,1)]; if(s&&fact[2*k]) links.push({D:fact[2*k],Lv:0,S:s}); }
-    }else{
-      for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)]; if(l&&fact[2*k]) links.push({D:fact[2*k],Lv:0,S:l}); }
-    }
-    // primary→secondary（输入中继）
-    for(let k=0;k<S;k++){ if(fact[2*k+1]) links.push({D:fact[2*k+1],Lv:0,S:fact[2*k]}); }
-    for(const [inId,inQ] of prod.in){
-      for(let k=0;k<P;k++){
-        const l=lp[k%Math.max(lp.length,1)], s=stor[k%Math.max(stor.length,1)];
-        if(s){
-          if(s&&fact[2*k]) routes.push({P:[s,fact[2*k]],Q:inQ,T:inId});                       // 仓库→主干厂
-          if(s&&fact[2*k+1]) routes.push({P:[s,fact[2*k],fact[2*k+1]],Q:inQ,T:inId});        // 仓库→主干→支线
-        }else if(l){
-          if(l&&fact[2*k]) routes.push({P:[l,fact[2*k]],Q:inQ,T:inId});
-          if(l&&fact[2*k+1]) routes.push({P:[l,fact[2*k],fact[2*k+1]],Q:inQ,T:inId});
-        }
-      }
-    }
-    for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)];
-      if(l&&fact[2*k]) routes.push({P:[fact[2*k],l],Q:prod.outQ,T:prod.id});
-      if(l&&fact[2*k+1]) routes.push({P:[fact[2*k+1],fact[2*k],l],Q:prod.outQ,T:prod.id}); }
-  }else{ // serial 串联式
-    const step=0.013; let cur=lo0;
-    for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=step;
-    for(let i=0;i<cfg.nStor;i++) stor.push(addPin(la0,cur,null,pl.stor)), cur+=step;
+  const lp=[],fact=[];
+  const L=factoryL(cfg);                       // 效率=1 台；长维护=每输入类型 1 台
+  const isLine=(cfg.layout==='chain'||sub==='serial');
+  // 发射台
+  if(isLine){
+    let cur=lo0-0.02;
+    for(let i=0;i<L;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=0.012;
+  }else{
+    for(let i=0;i<L;i++){ const p=polar(la0,lo0,0.012, Math.PI/2 + 2*Math.PI*i/Math.max(L,1)); lp.push(addPin(p.la,p.lo,null,pl.lp)); }
+  }
+  // 工厂：环形（非串行）或线性
+  if(isLine){
+    const step=0.013; let cur=lo0+0.03;
     for(let i=0;i<cfg.nFact;i++) fact.push(addPin(la0,cur,prod.id,struct)), cur+=step;
-    const lp0=lp[0], st0=stor[0];
-    if(lp0&&fact.length) links.push({D:fact[0],Lv:0,S:lp0});
-    for(let i=0;i<fact.length-1;i++) links.push({D:fact[i+1],Lv:0,S:fact[i]});
-    if(fact.length&&lp0) links.push({D:lp0,Lv:0,S:fact[fact.length-1]});
-    if(st0&&lp0) links.push({D:lp0,Lv:lvTrunk,S:st0});
-    if(st0&&fact.length) links.push({D:fact[0],Lv:0,S:st0});
-    for(const [inId,inQ] of prod.in){
-      for(let i=0;i<fact.length;i++){
-        if(st0) routes.push({P:[st0].concat(fact.slice(0,i+1)),Q:inQ,T:inId});          // 仓库→f1→…→fi
-        else if(lp0) routes.push({P:[lp0].concat(fact.slice(0,i+1)),Q:inQ,T:inId});     // 发射台→f1→…→fi
-      }
-    }
-    for(let i=0;i<fact.length;i++){ if(lp0) routes.push({P:[fact[i]].concat(fact.slice(i+1)).concat([lp0]),Q:prod.outQ,T:prod.id}); }
+  }else{
+    const rho=ringRho(cfg,cfg.nFact);
+    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,rho, Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,prod.id,struct)); }
+  }
+  // 链路：每厂 ↔ 每台（一条双向：输入进厂 + 输出出厂）
+  for(const f of fact) for(const l of lp) links.push({S:l,D:f,Lv:0});
+  // 输入路由：输入类型 i 由 发射台 (i % L) 供给全部厂
+  for(let i=0;i<prod.in.length;i++){
+    const [inId,inQ]=prod.in[i];
+    const src=lp[i%Math.max(L,1)];
+    for(const f of fact) routes.push({P:[src,f],Q:inQ,T:inId});
+  }
+  // 输出路由：每厂 → 全部发射台（Q 均分 outQ，余数给前几台）
+  const base=Math.floor(prod.outQ/L), rem=prod.outQ%L;
+  for(const f of fact){
+    for(let k=0;k<L;k++){ const q=base+(k<rem?1:0); if(q>0) routes.push({P:[f,lp[k]],Q:q,T:prod.id}); }
   }
   return {CmdCtrLv:cfg.ccu,
-          Cmt:`工厂 ${prod.name} ${cfg.nFact}厂 ${SUB_LABEL[sub]}`,
+          Cmt:`工厂 ${prod.name} ${cfg.nFact}厂 ${cfg.fMode==='long'?'长维护':'效率'}`,
           Diam:2*cfg.radius, L:links, P:pins, Pln:2016, R:routes};
 }
 /* 游戏格式序列化：字段顺序、冒号/逗号后空格、浮点带 .0，与游戏导出模板逐字节一致 */
@@ -690,11 +634,10 @@ function readCfg(){
     ccu:int('ccu',5),
     mode:$id('mode').value,
     tier:$id('tier').value,
+    fMode:$id('fMode').value,
     nFact:int('nFact',8),
     nStor:int('nStor',1),
     nLpad:int('nLpad',1),
-    days:int('daysMain',1),
-    dAuto:$id('dAuto').checked,
     nEcu:int('nEcu',1),
     nHead:int('nHead',10),
     yield:num('yield',1150000),
@@ -717,34 +660,31 @@ function suggestLevel(ver, reqM3){
   for(let i=0;i<ver.levels.length;i++) if(ver.levels[i].cap>=reqM3) return i;
   return ver.levels.length-1;
 }
-/* 工厂层级每厂每日输入/输出体积 m³ */
-function tierFlowM3(cfg){
-  const t=TIERS[cfg.tier];
-  const inM3=t.in*cfg[t.inV], outM3=t.out*cfg[t.outV];
-  return {inM3:inM3, outM3:outM3, maxM3:Math.max(inM3,outM3)};
+/* ===== 工厂：发射台数量与免维护天数 ===== */
+function factoryL(cfg){
+  // 效率=1 台；长维护=每输入类型 1 台
+  if(cfg.mode!=='factory') return cfg.nLpad;
+  if(cfg.fMode!=='long') return 1;
+  const prod=PRODUCTS.find(p=>p.id===cfg.prodId);
+  return prod&&prod.in.length>0? prod.in.length : 1;
 }
-/* D 天缓冲：需求 R=N×max(in,out)×D；可用 A=L×10000+S×12000 */
-function bufferNeed(cfg,N){
-  const f=tierFlowM3(cfg);
-  const A=cfg.nLpad*10000 + cfg.nStor*12000;
-  const need=N*f.maxM3*cfg.days;
-  const Sneed=Math.max(0, Math.ceil((need - cfg.nLpad*10000)/12000));
-  const inDays=N*f.inM3>0?A/(N*f.inM3):Infinity;
-  const outDays=N*f.outM3>0?A/(N*f.outM3):Infinity;
-  return {f:f, A:A, need:need, Sneed:Sneed, inDays:inDays, outDays:outDays};
-}
-/* 填仓：每条 launchpad↔storage 需在 FILL_HOURS 内搬入 D 天输入（m³/h） */
-function fillM3PerLink(cfg){
-  if(!cfg.nStor||!cfg.days) return 0;
+/* 每输入类型：每厂每日消耗 m³（q×24×体积），输出总 m³/天 */
+function inputTypesM3(cfg){
   const t=TIERS[cfg.tier];
-  return cfg.nFact*t.in*cfg[t.inV]*cfg.days/(cfg.nStor*FILL_HOURS);
+  const prod=PRODUCTS.find(p=>p.id===cfg.prodId)||PRODUCTS[0];
+  const arr=(prod.in||[]).map(([id,q])=>({id:id, q:q, m3day:q*24*cfg[t.inV]}));
+  if(arr.length===0) arr.push({id:0, q:t.in, m3day:t.in*cfg[t.inV]});
+  return {types:arr, inTotal:arr.reduce((s,x)=>s+x.m3day,0), outM3:t.out*cfg[t.outV]};
 }
-function bufferLv(cfg){ return cfg.nStor>0? suggestLevel(cfg.ver, fillM3PerLink(cfg)) : 0; }
-function fillHoursAt(cfg,lv){
-  if(!cfg.nStor||!cfg.days) return 0;
-  const t=TIERS[cfg.tier];
-  const batch=cfg.nFact*t.in*cfg[t.inV]*cfg.days;   // 总输入 m³
-  return batch/(cfg.nStor*cfg.ver.levels[lv].cap);
+/* 免维护天数 X：所有发射台满时，最紧的输入类型能撑的天数 */
+function maintainDays(cfg){
+  if(cfg.mode!=='factory'||cfg.nFact<=0) return 0;
+  const {types,inTotal,outM3}=inputTypesM3(cfg);
+  const L=factoryL(cfg);
+  if(cfg.fMode==='eff') return (L*10000)/(cfg.nFact*inTotal);
+  let x=Infinity;
+  for(const ty of types){ if(ty.m3day>0) x=Math.min(x, L*10000/(cfg.nFact*ty.m3day)); }
+  return x===Infinity?0:x;
 }
 
 /* ================= 链路组 ================= */
@@ -772,42 +712,25 @@ function buildLinkGroups(cfg){
       g.push({name:'末厂→发射台', count:1, flowUnits:cfg.nFact*MINING_OUT, vol:cfg.vP1, level:'upgTrunk'});
     }
   }else{
-    const t=TIERS[cfg.tier];
-    const m3i=t.in*cfg[t.inV]/24, m3o=t.out*cfg[t.outV]/24;   // 单厂输入/输出 m³/h
-    const m3io=m3i+m3o;
-    const hasBuf=cfg.nStor>0;
-    // 填仓流量：D 天输入在 FILL_HOURS 内经 S 条 launchpad↔storage 链路搬完
-    const fillM3=hasBuf? cfg.nFact*t.in*cfg[t.inV]*cfg.days/(cfg.nStor*FILL_HOURS) : 0;
-    if(isFull || isSemi){
-      if(hasBuf){
-        g.push({name:'发射台↔仓库(填仓)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
-        g.push({name:'仓库→工厂(输入)', count:cfg.nFact, reqM3:m3i, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
-        g.push({name:'工厂→发射台(输出)', count:cfg.nFact, reqM3:m3o, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
-      }else{
-        g.push({name:'工厂↔发射台', count:cfg.nFact, reqM3:m3io, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+    // 工厂：L 个发射台（效率=1 / 长维护=每输入类型1台），每厂连全部台
+    const L=factoryL(cfg);
+    const {types,outM3}=inputTypesM3(cfg);
+    const perH=types.map(ty=>ty.m3day/24);       // 每厂每输入类型 m³/h
+    const inTotH=perH.reduce((a,b)=>a+b,0);      // 每厂全部输入 m³/h
+    const outH=outM3/24;                         // 每厂输出 m³/h
+    // 效率=单台独扛全部输入+输出；长维护=每台只扛一类输入+均分输出
+    const req=cfg.fMode==='eff'? inTotH+outH : Math.max.apply(null,perH)+outH/Math.max(L,1);
+    const isLine=(cfg.layout==='chain'||sub==='serial');
+    if(isLine){
+      // 串联/线性：发射台簇在 lo0-0.02(+0.012×L)，工厂自 lo0+0.03 起每 0.013 一个——
+      // 每条链路真实长度随厂号增长，逐厂行计费（与 buildFactoryTemplate 摆放坐标一致）
+      const padCenter=0.012*(L-1)/2;             // 发射台簇中心相对 lo0-0.02 的偏移(rad)
+      for(let i=0;i<cfg.nFact;i++){
+        const dLo=0.05 + 0.013*i - padCenter;    // 台簇中心→厂 i 的经度差(rad)
+        g.push({name:`厂${i+1}↔L台`, count:L, reqM3:req, level:'upgOther', len:dLo*cfg.radius});
       }
-    }else if(isHub){
-      const P=Math.ceil(cfg.nFact/2);
-      if(hasBuf){
-        g.push({name:'发射台↔仓库(填仓)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
-        if(cfg.nFact>0) g.push({name:'仓库→主干厂(输入)', count:P, reqM3:2*m3i, level:'upgOther', len:ringLenKm(cfg,P)});
-        if(cfg.nFact>1) g.push({name:'主干→支线厂(输入)', count:Math.floor(cfg.nFact/2), reqM3:m3i, level:'upgOther', len:0.012008578*cfg.radius});
-        g.push({name:'工厂→发射台(输出)', count:cfg.nFact, reqM3:m3o, level:'upgOther', len:ringLenKm(cfg,P)});
-      }else{
-        if(cfg.nFact>0) g.push({name:'发射台→主干厂', count:P, reqM3:2*m3io, level:'upgTrunk', len:ringLenKm(cfg,P)});
-        if(cfg.nFact>1) g.push({name:'主干→支线厂', count:Math.floor(cfg.nFact/2), reqM3:m3io, level:'upgOther', len:0.012008578*cfg.radius});
-      }
-    }else{ // serial
-      if(hasBuf){
-        g.push({name:'发射台↔仓库(填仓)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
-        g.push({name:'仓库→f1(输入干路)', count:1, reqM3:cfg.nFact*m3i, level:'upgTrunk'});
-        if(cfg.nFact>1) g.push({name:'链内中继 f_i→f_i+1', count:cfg.nFact-1, reqM3:(cfg.nFact-1)*m3i, level:'upgTrunk'});
-        g.push({name:'末厂→发射台(输出)', count:1, reqM3:cfg.nFact*m3o, level:'upgTrunk'});
-      }else{
-        g.push({name:'发射台→f1（干路）', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
-        if(cfg.nFact>1) g.push({name:'链内中继 f_i→f_i+1', count:cfg.nFact-1, reqM3:(cfg.nFact-1)*m3io, level:'upgTrunk'});
-        g.push({name:'末厂→发射台', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
-      }
+    }else{
+      g.push({name:'工厂↔发射台(供料)', count:cfg.nFact*L, reqM3:req, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
     }
   }
   return g;
@@ -825,10 +748,11 @@ function evaluate(cfg, autoUpg){
   const add=(k,n)=>{ if(n<=0) return; const st=STRUCT[k]; structs.push({name:`${st.name} ×${n}`, cpu:st.cpu*n, pg:st.pg*n}); sCpu+=st.cpu*n; sPg+=st.pg*n; };
   if(cfg.mode==='mining'){
     add('basic',cfg.nFact); add('ecu',cfg.nEcu); add('head',cfg.nEcu*cfg.nHead);
+    add('storage',cfg.nStor); add('launchpad',cfg.nLpad);
   }else{
     add(TIERS[cfg.tier].fact,cfg.nFact);
+    add('launchpad',factoryL(cfg));
   }
-  add('storage',cfg.nStor); add('launchpad',cfg.nLpad);
 
   const groups=buildLinkGroups(cfg);
   let lCpu=0, lPg=0, uCpu=0, uPg=0;
@@ -844,7 +768,8 @@ function evaluate(cfg, autoUpg){
     lCpu+=bCpu*gr.count; lPg+=bPg*gr.count;
     uCpu+=ver.levels[lvl].cpu*gr.count; uPg+=ver.levels[lvl].pg*gr.count;
     rows.push({name:gr.name, count:gr.count, flow:gr.flowUnits!=null?gr.flowUnits:Math.round(req*24/(gr.vol||1)), vol:gr.vol,
-               req:req, lvl:lvl, suggest:suggest, cap:cap, ok:ok, used:(req/cap*100)});
+               req:req, lvl:lvl, suggest:suggest, cap:cap, ok:ok, used:(req/cap*100),
+               len:Math.round(len), bCpu:bCpu, bPg:bPg, uCpu:ver.levels[lvl].cpu, uPg:ver.levels[lvl].pg});
   }
   const totCpu=sCpu+lCpu+uCpu, totPg=sPg+lPg+uPg;
   return {
@@ -889,21 +814,6 @@ function update(){
     }
   }
   $id('nFact').disabled=$id('nAuto').checked;
-  // 工厂缓冲自动适配：D>1 且开关开时，仓库数同步为撑 D 天所需；upgTrunk 同步为填仓链路等级
-  if(cfg.mode==='factory' && cfg.days>1 && cfg.dAuto){
-    const Sneed=bufferNeed(cfg,cfg.nFact).Sneed;
-    if($id('nStor').value!=Sneed){
-      $id('nStor').value=Sneed;
-      cfg=readCfg();
-    }
-    const bl=bufferLv(cfg);
-    if(parseInt($id('upgTrunk').value,10)!==bl){
-      $id('upgTrunk').value=bl;
-      cfg=readCfg();
-    }
-  }
-  $id('nStor').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
-  $id('upgTrunk').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
   const ver=cfg.ver;
   populateFactoryProd();
   // 升级等级下拉上限
@@ -929,9 +839,10 @@ function showHide(cfg){
   $id('miningHead').style.display=cfg.mode==='mining'?'':'none';
   $id('tierRow').style.display=cfg.mode==='factory'?'':'none';
   $id('prodRow').style.display=cfg.mode==='factory'?'':'none';
-  $id('daysRow').style.display=cfg.mode==='factory'?'':'none';
-  $id('dAutoRow').style.display=cfg.mode==='factory'?'':'none';
-  $id('trunkRow').style.display=layoutSubOf(cfg)==='full'?'none':'';
+  $id('fModeRow').style.display=cfg.mode==='factory'?'':'none';
+  $id('storRow').style.display=cfg.mode==='mining'?'':'none';
+  $id('lpadRow').style.display=cfg.mode==='mining'?'':'none';
+  $id('trunkRow').style.display=(cfg.mode==='mining'&&layoutSubOf(cfg)!=='full')?'':'none';
   $id('mapRow').style.display=cfg.ver.id==='new'?'':'none';
   $id('resSupplyHead').style.display=cfg.mode==='mining'?'':'none';
   $id('resSupply').style.display=cfg.mode==='mining'?'':'none';
@@ -939,8 +850,6 @@ function showHide(cfg){
   $id('resFactory').style.display=cfg.mode==='factory'?'':'none';
   $id('resBufHead').style.display=cfg.mode==='factory'?'':'none';
   $id('resBuf').style.display=cfg.mode==='factory'?'':'none';
-  // 仓库数在 工厂+D>1+自动缓冲 时不可手改
-  $id('nStor').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
 }
 function statusTag(ok){
   return ok?'<span class="tag tag-ok">✓ 满足</span>':'<span class="tag tag-bad">✗ 超限</span>';
@@ -967,18 +876,20 @@ function renderStatus(r){
   $id('resStatus').innerHTML=parts.join('　')+'　'+msg;
 }
 function renderLinks(r, cfg){
-  let h='<tr><th class="l">链路</th><th>条数</th><th>流量(单位/天)</th><th>所需 m³/h</th><th>容量 m³/h</th><th>建议级</th><th>已设级</th><th>占用</th><th>状态</th></tr>';
+  let h='<tr><th class="l">链路</th><th>条数</th><th>长度 km</th><th>单条建造+升级<br>CPU/PG</th><th>流量(单位/天)</th><th>所需 m³/h</th><th>容量 m³/h</th><th>建议级</th><th>已设级</th><th>占用</th><th>状态</th></tr>';
   for(const x of r.rows){
     const need=x.ok?'':'<span class="tag tag-warn">需升级</span>';
     const lvlCls=x.ok?'':'class="warn"';
+    const cost=(x.bCpu!=null&&x.uCpu!=null)?`${Math.round(x.bCpu)}+${x.uCpu} / ${Math.round(x.bPg)}+${x.uPg}`:'—';
     h+=`<tr><td class="l">${x.name}</td><td class="mono">${x.count}</td>
+      <td class="mono">${fmt(x.len)}</td><td class="mono">${cost}</td>
       <td class="mono">${fmt(x.flow)}</td><td class="mono">${fmt1(x.req)}</td>
       <td class="mono">${fmt(x.cap)}</td>
       <td class="mono">${x.suggest}</td><td class="mono ${lvlCls}">${x.lvl}</td>
       <td class="mono ${x.used>100?'bad':x.used>85?'warn':''}">${Math.round(x.used)}%</td>
       <td>${x.ok?'':'<span class="tag tag-warn">瓶颈</span>'}</td></tr>`;
   }
-  if(r.rows.length===0) h='<tr><td colspan="9" class="l">无链路（工厂数=0）</td></tr>';
+  if(r.rows.length===0) h='<tr><td colspan="11" class="l">无链路（工厂数=0）</td></tr>';
   $id('resLinks').innerHTML=h;
 }
 function renderSupply(r, cfg){
@@ -1020,29 +931,22 @@ function renderFactory(cfg){
   $id('resFactory').innerHTML=h;
 }
 function renderBuffer(cfg){
-  const b=bufferNeed(cfg,cfg.nFact);
-  const f=b.f;
-  const fits=b.A>=b.need;
-  const more=Math.max(0,b.Sneed-cfg.nStor);
+  const L=factoryL(cfg);
+  const {types,inTotal,outM3}=inputTypesM3(cfg);
+  const days=maintainDays(cfg);
   const t=TIERS[cfg.tier];
+  const fmtD=x=> x<1? (Math.round(x*100)/100).toLocaleString('zh-CN') : fmt1(x);
+  const lpTxt=cfg.fMode==='long'?'长维护（每输入类型 1 发射台）':'效率（单发射台混装全部输入/输出）';
   let h=`<table><tr><th class="l">项目</th><th>数值</th></tr>`;
-  h+=`<tr><td class="l">每厂输入/输出（${t.label}）</td><td class="mono">${fmt1(f.inM3)} / ${fmt1(f.outM3)} m³/天</td></tr>`;
-  h+=`<tr><td class="l">${cfg.nFact} 厂合计输入/输出</td><td class="mono">${fmt1(f.inM3*cfg.nFact)} / ${fmt1(f.outM3*cfg.nFact)} m³/天</td></tr>`;
-  h+=`<tr><td class="l">缓冲容量 A（${cfg.nStor} 仓 + ${cfg.nLpad} 发射台）</td><td class="mono">${fmt(b.A)} m³</td></tr>`;
-  h+=`<tr><td class="l">输入缓冲可撑</td><td class="mono">${fmt1(b.inDays)} 天</td></tr>`;
-  h+=`<tr><td class="l">输出缓冲可撑</td><td class="mono">${fmt1(b.outDays)} 天</td></tr>`;
-  h+=`<tr><td class="l">需求 R（N×max×D=${cfg.days}）</td><td class="mono">${fmt(b.need)} m³</td></tr>`;
-  h+=`<tr><td class="l">达标需仓库总数 / 还差</td><td class="mono">${b.Sneed} / ${more}</td></tr>`;
-  if(cfg.nStor>0){
-    const fill=fillM3PerLink(cfg);
-    const lv=bufferLv(cfg);
-    const curLv=cfg.days>1&&cfg.dAuto?lv:Math.min(parseInt($id('upgTrunk').value,10)||0, cfg.ver.levels.length-1);
-    const hrs=fillHoursAt(cfg,curLv);
-    h+=`<tr><td class="l">快捷传输流量/条（D 天÷${FILL_HOURS}h÷${cfg.nStor}仓）</td><td class="mono">${fmt1(fill)} m³/h → 建议升 Lv ${lv}</td></tr>`;
-    h+=`<tr><td class="l">当前 Lv ${curLv} 装满约需</td><td class="mono">${fmt1(hrs)} 小时 ${hrs>FILL_HOURS?'<span class="tag tag-warn">偏慢</span>':'<span class="tag tag-ok">达标</span>'}</td></tr>`;
-    h+=`<tr><td class="l" colspan="2" style="text-align:left;font-size:12px;color:#57606a;">⚠ 发射台与仓库间不能建路由，须用<b>快捷传输</b>补货：导入 P1/P2/P3 到发射台 → 快捷传输到仓库（每次有冷却，链路 Lv 越高越快）。仓库→工厂路由已配好，自动喂厂。</td></tr>`;
+  h+=`<tr><td class="l">模式</td><td class="l">${lpTxt}（共 ${L} 台 × 10,000 m³）</td></tr>`;
+  for(let i=0;i<types.length;i++){
+    const ty=types[i];
+    h+=`<tr><td class="l">输入类型 ${i+1} 每厂日耗</td><td class="mono">${fmt(ty.q*24)} 单位 ≈ ${fmt1(ty.m3day)} m³</td></tr>`;
   }
-  h+=`<tr><td class="l">维护周期可行性</td><td>${fits?'<span class="tag tag-ok">满足 '+cfg.days+' 天</span>':'<span class="tag tag-bad">不足，D 天内会断供</span>'}</td></tr>`;
+  h+=`<tr><td class="l">${cfg.nFact} 厂合计输入消耗</td><td class="mono">${fmt1(inTotal*cfg.nFact)} m³/天</td></tr>`;
+  h+=`<tr><td class="l">${cfg.nFact} 厂合计输出产出</td><td class="mono">${fmt1(outM3*cfg.nFact)} m³/天</td></tr>`;
+  h+=`<tr><td class="l">发射台满仓可免维护（输入耗尽前）</td><td class="mono">${fmtD(days)} 天 ${days>=1?'<span class="tag tag-ok">可过夜/隔日收</span>':(days>0?'<span class="tag tag-warn">需频繁补料</span>':'<span class="tag tag-bad">无法自给</span>')}</td></tr>`;
+  h+=`<tr><td class="l" colspan="2" style="text-align:left;font-size:12px;color:#57606a;">注：发射台负责装卸（导入原料、导出成品），不建中转仓库。满仓 X 天后输入耗尽、工厂停产；届时上线补料即恢复满产。${cfg.fMode==='eff'?'效率模式单台混装，X 通常不到 1 天，适合勤上线玩家。':'长维护模式每类输入独占 1 台，X 明显拉长，适合隔天/数天上线的玩家。'}</td></tr>`;
   h+=`</table>`;
   $id('resBuf').innerHTML=h;
 }
@@ -1050,16 +954,8 @@ function maxFeasibleN(cfg){
   let best=-1;
   for(let N=0;N<=40;N++){
     const c2={...cfg, nFact:N};
-    if(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto){
-      // D 缓冲模式：仓库数=Sneed，单一 upgTrunk=bufferLv（与显示/导出一致，避免过度 autoUpg）
-      c2.nStor=bufferNeed(cfg,N).Sneed;
-      c2.upgTrunk=bufferLv(c2);
-      const r=evaluate(c2,false);
-      if(r.cpuOk&&r.pgOk) best=N; else break;
-    }else{
-      const r=evaluate(c2,true);
-      if(r.cpuOk&&r.pgOk) best=N; else break;
-    }
+    const r=evaluate(c2,true);
+    if(r.cpuOk&&r.pgOk) best=N; else break;
   }
   return best;
 }
@@ -1134,7 +1030,7 @@ function selfCheck(){
 }
 
 /* ================= 事件 ================= */
-const bindIds=['ccu','mode','tier','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','daysMain','dAuto','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
+const bindIds=['ccu','mode','tier','fMode','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
 for(const id of bindIds) $id(id).addEventListener('input',update);
 $id('btnExport').addEventListener('click',exportJSON);
 $id('btnCopy').addEventListener('click',copyJSON);

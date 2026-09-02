@@ -79,6 +79,14 @@
           <select id="factoryProd"></select>
           <div class="hint">Product list filtered by processing tier</div>
         </div>
+        <div class="row" id="fModeRow" style="display:none;">
+          <label>Factory Mode</label>
+          <select id="fMode">
+            <option value="eff" selected>Efficiency (single launchpad)</option>
+            <option value="long">Long-maintenance (1 launchpad per input type)</option>
+          </select>
+          <div class="hint">Efficiency: 1 launchpad feeds all factories directly (full ≈ 1 day); Long-maintenance: each input type has its own launchpad, can run for days unattended (launchpads are expensive, factory count drops a bit)</div>
+        </div>
         <div class="row">
           <label>Factory Count N</label>
           <input type="number" id="nFact" value="8" min="0" max="40" step="1">
@@ -87,23 +95,15 @@
           <label><input type="checkbox" id="nAuto" checked style="flex:0; width:auto; min-width:0;"> Auto-fit factory count to CCU/config</label>
           <div class="hint">On: N is always the max structurally feasible for the current CCU/topology/radius (adjusts with CCU); Off: manual input</div>
         </div>
-        <div class="row">
+        <div class="row" id="storRow">
           <label>Storage S (extractor→factory P0 buffer)</label>
           <input type="number" id="nStor" value="1" min="0" max="20" step="1">
-          <div class="hint">Prevents overflow when extraction exceeds factory processing; 1 is usually enough. Launchpad adds 10,000 m³ storage, included in the buffer (slightly reduced by P1 output loaded).</div>
+          <div class="hint">Mining only; prevents overflow when extraction exceeds factory processing. Launchpad adds 10,000 m³ storage, included in the buffer.</div>
         </div>
-        <div class="row">
-          <label>Launchpad Count L</label>
+        <div class="row" id="lpadRow">
+          <label>Launchpad Count L (mining)</label>
           <input type="number" id="nLpad" value="1" min="1" max="10" step="1">
-        </div>
-        <div class="row" id="daysRow" style="display:none;">
-          <label>Maintenance Interval D (days)</label>
-          <input type="number" id="daysMain" value="1" min="1" max="30" step="1">
-          <div class="hint">Days between resupply visits; when D&gt;1 the input/output buffer must cover D days</div>
-        </div>
-        <div class="row" id="dAutoRow" style="display:none;">
-          <label><input type="checkbox" id="dAuto" checked style="flex:0; width:auto; min-width:0;"> Auto-size buffer for D</label>
-          <div class="hint">On: auto-add storage to cover D days and reduce factory count; Off: show suggestion only</div>
+          <div class="hint">Manual for mining; in factory mode the launchpad count follows the chosen mode</div>
         </div>
       </div>
 
@@ -243,7 +243,7 @@
       <h2 id="resFactoryHead">Factory Daily Throughput</h2>
       <div class="panel" id="resFactory"></div>
 
-      <h2 id="resBufHead">Buffer Assessment (maintenance interval)</h2>
+      <h2 id="resBufHead">No-Maintenance Assessment (launchpad array)</h2>
       <div class="panel" id="resBuf"></div>
 
       <h2>Link Throughput Bottleneck Check</h2>
@@ -333,7 +333,6 @@ const TIERS = {
         note:'18 P3/h → 1 P4/h (each input needs 2 P3 factories feeding it; Barren/Temperate only)'},
 };
 const MINING_IN=144000, MINING_OUT=960;
-const FILL_HOURS=12;   // target fill window: move the D-day buffer into storage within 12h
 
 /* ================= Export data (from repo templates/ESI) ================= */
 const PLANETS={
@@ -527,93 +526,39 @@ function buildFactoryTemplate(cfg){
   const pins=[], links=[], routes=[];
   const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:+la.toFixed(5), Lo:+lo.toFixed(5), S:s, T:t}); return pins.length; };
   const la0=1.5708, lo0=1.0;
-  const lp=[],stor=[],fact=[];
-  const lvTrunk=Math.min(cfg.upgTrunk, cfg.ver.levels.length-1);
-  const stLp=()=>{ for(const a of stor){ for(const b of lp){ links.push({D:b,Lv:lvTrunk,S:a}); } } };
-  if(sub==='full' || sub==='semistar'){
-    // Launchpad hub: launchpad centered, one link per factory
-    for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,lo0,null,pl.lp));
-    for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/Math.max(cfg.nStor,1)); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
-    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,ringRho(cfg,cfg.nFact), Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,prod.id,struct)); }
-    for(let i=0;i<fact.length;i++) links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]});
-    stLp();
-    if(cfg.nStor>0) for(let i=0;i<fact.length;i++){ const s=stor[i%stor.length]; if(s) links.push({S:s,D:fact[i],Lv:0}); }
-    for(const [inId,inQ] of prod.in){
-      for(let i=0;i<fact.length;i++){
-        const l=lp[i%Math.max(lp.length,1)], s=stor[i%Math.max(stor.length,1)];
-        if(s) routes.push({P:[s,fact[i]],Q:inQ,T:inId});            // storage→factory (buffer feed, valid)
-        else if(l) routes.push({P:[l,fact[i]],Q:inQ,T:inId});       // launchpad→factory direct
-      }
-    }
-    for(let i=0;i<fact.length;i++) routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]],Q:prod.outQ,T:prod.id});
-  }else if(sub==='hub'){
-    // Launchpad hub + paired factories; with buffer storage, input goes through storage
-    const line=cfg.layout==='chain';
-    if(line){
-      let cur=lo0-0.026;
-      for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=0.013;
-      for(let i=0;i<cfg.nStor;i++) stor.push(addPin(la0,cur,null,pl.stor)), cur+=0.013;
-      const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
-      for(let k=0;k<P;k++){ fact.push(addPin(la0,cur,prod.id,struct)); cur+=0.013; if(k<S){ fact.push(addPin(la0,cur,prod.id,struct)); cur+=0.013; } }
-    }else{
-      for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,lo0,null,pl.lp));
-      for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/Math.max(cfg.nStor,1)); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
-      const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
-      const rhoP=ringRho(cfg,P);
-      for(let k=0;k<P;k++){
-        const th=Math.PI/2 + 2*Math.PI*k/Math.max(P,1);
-        const p=polar(la0,lo0,rhoP,th); fact.push(addPin(p.la,p.lo,prod.id,struct));
-        if(k<S){ const q=polar(la0,lo0,rhoP+0.012008578,th); fact.push(addPin(q.la,q.lo,prod.id,struct)); }
-      }
-    }
-    stLp();
-    const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
-    // output: primary→launchpad
-    for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)]; if(l&&fact[2*k]) links.push({D:l,Lv:0,S:fact[2*k]}); }
-    // input: via storage (if any) else launchpad
-    if(cfg.nStor>0){
-      for(let k=0;k<P;k++){ const s=stor[k%Math.max(stor.length,1)]; if(s&&fact[2*k]) links.push({D:fact[2*k],Lv:0,S:s}); }
-    }else{
-      for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)]; if(l&&fact[2*k]) links.push({D:fact[2*k],Lv:0,S:l}); }
-    }
-    // primary→secondary (input relay)
-    for(let k=0;k<S;k++){ if(fact[2*k+1]) links.push({D:fact[2*k+1],Lv:0,S:fact[2*k]}); }
-    for(const [inId,inQ] of prod.in){
-      for(let k=0;k<P;k++){
-        const l=lp[k%Math.max(lp.length,1)], s=stor[k%Math.max(stor.length,1)];
-        if(s){
-          if(s&&fact[2*k]) routes.push({P:[s,fact[2*k]],Q:inQ,T:inId});                    // storage→primary
-          if(s&&fact[2*k+1]) routes.push({P:[s,fact[2*k],fact[2*k+1]],Q:inQ,T:inId});     // storage→primary→secondary
-        }else if(l){
-          if(l&&fact[2*k]) routes.push({P:[l,fact[2*k]],Q:inQ,T:inId});
-          if(l&&fact[2*k+1]) routes.push({P:[l,fact[2*k],fact[2*k+1]],Q:inQ,T:inId});
-        }
-      }
-    }
-    for(let k=0;k<P;k++){ const l=lp[k%Math.max(lp.length,1)];
-      if(l&&fact[2*k]) routes.push({P:[fact[2*k],l],Q:prod.outQ,T:prod.id});
-      if(l&&fact[2*k+1]) routes.push({P:[fact[2*k+1],fact[2*k],l],Q:prod.outQ,T:prod.id}); }
-  }else{ // serial
-    const step=0.013; let cur=lo0;
-    for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=step;
-    for(let i=0;i<cfg.nStor;i++) stor.push(addPin(la0,cur,null,pl.stor)), cur+=step;
+  const lp=[],fact=[];
+  const L=factoryL(cfg);                       // Efficiency=1 launchpad; Long-maintenance=1 per input type
+  const isLine=(cfg.layout==='chain'||sub==='serial');
+  // Launchpads
+  if(isLine){
+    let cur=lo0-0.02;
+    for(let i=0;i<L;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=0.012;
+  }else{
+    for(let i=0;i<L;i++){ const p=polar(la0,lo0,0.012, Math.PI/2 + 2*Math.PI*i/Math.max(L,1)); lp.push(addPin(p.la,p.lo,null,pl.lp)); }
+  }
+  // Factories: ring (non-serial) or line
+  if(isLine){
+    const step=0.013; let cur=lo0+0.03;
     for(let i=0;i<cfg.nFact;i++) fact.push(addPin(la0,cur,prod.id,struct)), cur+=step;
-    const lp0=lp[0], st0=stor[0];
-    if(lp0&&fact.length) links.push({D:fact[0],Lv:0,S:lp0});
-    for(let i=0;i<fact.length-1;i++) links.push({D:fact[i+1],Lv:0,S:fact[i]});
-    if(fact.length&&lp0) links.push({D:lp0,Lv:0,S:fact[fact.length-1]});
-    if(st0&&lp0) links.push({D:lp0,Lv:lvTrunk,S:st0});
-    if(st0&&fact.length) links.push({D:fact[0],Lv:0,S:st0});
-    for(const [inId,inQ] of prod.in){
-      for(let i=0;i<fact.length;i++){
-        if(st0) routes.push({P:[st0].concat(fact.slice(0,i+1)),Q:inQ,T:inId});        // storage→f1→…→fi
-        else if(lp0) routes.push({P:[lp0].concat(fact.slice(0,i+1)),Q:inQ,T:inId});   // launchpad→f1→…→fi
-      }
-    }
-    for(let i=0;i<fact.length;i++){ if(lp0) routes.push({P:[fact[i]].concat(fact.slice(i+1)).concat([lp0]),Q:prod.outQ,T:prod.id}); }
+  }else{
+    const rho=ringRho(cfg,cfg.nFact);
+    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,rho, Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,prod.id,struct)); }
+  }
+  // Links: every factory ↔ every launchpad (one bidirectional: input in + output out)
+  for(const f of fact) for(const l of lp) links.push({S:l,D:f,Lv:0});
+  // Input routes: input type i comes from launchpad (i % L) to all factories
+  for(let i=0;i<prod.in.length;i++){
+    const [inId,inQ]=prod.in[i];
+    const src=lp[i%Math.max(L,1)];
+    for(const f of fact) routes.push({P:[src,f],Q:inQ,T:inId});
+  }
+  // Output routes: each factory → all launchpads (outQ split evenly, remainder to the first pads)
+  const base=Math.floor(prod.outQ/L), rem=prod.outQ%L;
+  for(const f of fact){
+    for(let k=0;k<L;k++){ const q=base+(k<rem?1:0); if(q>0) routes.push({P:[f,lp[k]],Q:q,T:prod.id}); }
   }
   return {CmdCtrLv:cfg.ccu,
-          Cmt:`Factory ${prod.name} ${cfg.nFact}fac ${SUB_LABEL[sub]}`,
+          Cmt:`Factory ${prod.name} ${cfg.nFact}fac ${cfg.fMode==='long'?'Long-Maintenance':'Efficiency'}`,
           Diam:2*cfg.radius, L:links, P:pins, Pln:2016, R:routes};
 }
 /* Game-format serialization: field order, space after colons/commas, float .0, byte-identical to in-game export */
@@ -689,11 +634,10 @@ function readCfg(){
     ccu:int('ccu',5),
     mode:$id('mode').value,
     tier:$id('tier').value,
+    fMode:$id('fMode').value,
     nFact:int('nFact',8),
     nStor:int('nStor',1),
     nLpad:int('nLpad',1),
-    days:int('daysMain',1),
-    dAuto:$id('dAuto').checked,
     nEcu:int('nEcu',1),
     nHead:int('nHead',10),
     yield:num('yield',1150000),
@@ -716,34 +660,31 @@ function suggestLevel(ver, reqM3){
   for(let i=0;i<ver.levels.length;i++) if(ver.levels[i].cap>=reqM3) return i;
   return ver.levels.length-1;
 }
-/* Per-factory daily input/output volume m³ for the selected tier */
-function tierFlowM3(cfg){
-  const t=TIERS[cfg.tier];
-  const inM3=t.in*cfg[t.inV], outM3=t.out*cfg[t.outV];
-  return {inM3:inM3, outM3:outM3, maxM3:Math.max(inM3,outM3)};
+/* ===== Factory: launchpad count & no-maintenance days ===== */
+function factoryL(cfg){
+  // Efficiency = 1 launchpad; Long-maintenance = 1 per input type
+  if(cfg.mode!=='factory') return cfg.nLpad;
+  if(cfg.fMode!=='long') return 1;
+  const prod=PRODUCTS.find(p=>p.id===cfg.prodId);
+  return prod&&prod.in.length>0? prod.in.length : 1;
 }
-/* D-day buffer: need R=N×max(in,out)×D; available A=L×10000+S×12000 */
-function bufferNeed(cfg,N){
-  const f=tierFlowM3(cfg);
-  const A=cfg.nLpad*10000 + cfg.nStor*12000;
-  const need=N*f.maxM3*cfg.days;
-  const Sneed=Math.max(0, Math.ceil((need - cfg.nLpad*10000)/12000));
-  const inDays=N*f.inM3>0?A/(N*f.inM3):Infinity;
-  const outDays=N*f.outM3>0?A/(N*f.outM3):Infinity;
-  return {f:f, A:A, need:need, Sneed:Sneed, inDays:inDays, outDays:outDays};
-}
-/* Fill: each launchpad↔storage link must move D-day input in FILL_HOURS (m³/h) */
-function fillM3PerLink(cfg){
-  if(!cfg.nStor||!cfg.days) return 0;
+/* Per input type: m³ consumed per factory per day (q×24×volume); output m³/day */
+function inputTypesM3(cfg){
   const t=TIERS[cfg.tier];
-  return cfg.nFact*t.in*cfg[t.inV]*cfg.days/(cfg.nStor*FILL_HOURS);
+  const prod=PRODUCTS.find(p=>p.id===cfg.prodId)||PRODUCTS[0];
+  const arr=(prod.in||[]).map(([id,q])=>({id:id, q:q, m3day:q*24*cfg[t.inV]}));
+  if(arr.length===0) arr.push({id:0, q:t.in, m3day:t.in*cfg[t.inV]});
+  return {types:arr, inTotal:arr.reduce((s,x)=>s+x.m3day,0), outM3:t.out*cfg[t.outV]};
 }
-function bufferLv(cfg){ return cfg.nStor>0? suggestLevel(cfg.ver, fillM3PerLink(cfg)) : 0; }
-function fillHoursAt(cfg,lv){
-  if(!cfg.nStor||!cfg.days) return 0;
-  const t=TIERS[cfg.tier];
-  const batch=cfg.nFact*t.in*cfg[t.inV]*cfg.days;
-  return batch/(cfg.nStor*cfg.ver.levels[lv].cap);
+/* No-maintenance days X: with all launchpads full, the tightest input type keeps running for X days */
+function maintainDays(cfg){
+  if(cfg.mode!=='factory'||cfg.nFact<=0) return 0;
+  const {types,inTotal,outM3}=inputTypesM3(cfg);
+  const L=factoryL(cfg);
+  if(cfg.fMode==='eff') return (L*10000)/(cfg.nFact*inTotal);
+  let x=Infinity;
+  for(const ty of types){ if(ty.m3day>0) x=Math.min(x, L*10000/(cfg.nFact*ty.m3day)); }
+  return x===Infinity?0:x;
 }
 
 /* ================= Link Groups ================= */
@@ -771,42 +712,25 @@ function buildLinkGroups(cfg){
       g.push({name:'Last Factory→Launchpad', count:1, flowUnits:cfg.nFact*MINING_OUT, vol:cfg.vP1, level:'upgTrunk'});
     }
   }else{
-    const t=TIERS[cfg.tier];
-    const m3i=t.in*cfg[t.inV]/24, m3o=t.out*cfg[t.outV]/24;   // per-factory input/output m³/h
-    const m3io=m3i+m3o;
-    const hasBuf=cfg.nStor>0;
-    // fill flow: D-day input moved through S launchpad↔storage links in FILL_HOURS
-    const fillM3=hasBuf? cfg.nFact*t.in*cfg[t.inV]*cfg.days/(cfg.nStor*FILL_HOURS) : 0;
-    if(isFull || isSemi){
-      if(hasBuf){
-        g.push({name:'Launchpad↔Storage (fill)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
-        g.push({name:'Storage→Factory (input)', count:cfg.nFact, reqM3:m3i, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
-        g.push({name:'Factory→Launchpad (output)', count:cfg.nFact, reqM3:m3o, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
-      }else{
-        g.push({name:'Factory↔Launchpad', count:cfg.nFact, reqM3:m3io, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+    // Factory: L launchpads (Efficiency=1 / Long-maintenance=1 per input type); every factory links to every launchpad
+    const L=factoryL(cfg);
+    const {types,outM3}=inputTypesM3(cfg);
+    const perH=types.map(ty=>ty.m3day/24);       // m³/h per factory per input type
+    const inTotH=perH.reduce((a,b)=>a+b,0);      // all inputs per factory m³/h
+    const outH=outM3/24;                         // output per factory m³/h
+    // Efficiency: the single launchpad carries all inputs + output; Long-maintenance: each pad carries one input type + a share of output
+    const req=cfg.fMode==='eff'? inTotH+outH : Math.max.apply(null,perH)+outH/Math.max(L,1);
+    const isLine=(cfg.layout==='chain'||sub==='serial');
+    if(isLine){
+      // Serial/line: launchpad cluster sits at lo0-0.02 (step 0.012×L), factories run from lo0+0.03 by 0.013 each —
+      // each link's real length grows with factory index, so charge per-factory rows (mirrors buildFactoryTemplate placement)
+      const padCenter=0.012*(L-1)/2;             // launchpad cluster center offset (rad) from lo0-0.02
+      for(let i=0;i<cfg.nFact;i++){
+        const dLo=0.05 + 0.013*i - padCenter;    // lon difference cluster center → factory i (rad)
+        g.push({name:`Factory ${i+1}↔Pads`, count:L, reqM3:req, level:'upgOther', len:dLo*cfg.radius});
       }
-    }else if(isHub){
-      const P=Math.ceil(cfg.nFact/2);
-      if(hasBuf){
-        g.push({name:'Launchpad↔Storage (fill)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
-        if(cfg.nFact>0) g.push({name:'Storage→Primary (input)', count:P, reqM3:2*m3i, level:'upgOther', len:ringLenKm(cfg,P)});
-        if(cfg.nFact>1) g.push({name:'Primary→Secondary (input)', count:Math.floor(cfg.nFact/2), reqM3:m3i, level:'upgOther', len:0.012008578*cfg.radius});
-        g.push({name:'Factory→Launchpad (output)', count:cfg.nFact, reqM3:m3o, level:'upgOther', len:ringLenKm(cfg,P)});
-      }else{
-        if(cfg.nFact>0) g.push({name:'Launchpad→Primary', count:P, reqM3:2*m3io, level:'upgTrunk', len:ringLenKm(cfg,P)});
-        if(cfg.nFact>1) g.push({name:'Primary→Secondary', count:Math.floor(cfg.nFact/2), reqM3:m3io, level:'upgOther', len:0.012008578*cfg.radius});
-      }
-    }else{ // serial
-      if(hasBuf){
-        g.push({name:'Launchpad↔Storage (fill)', count:cfg.nStor, reqM3:fillM3, level:'upgTrunk', len:0.012008578*cfg.radius});
-        g.push({name:'Storage→f1 (input trunk)', count:1, reqM3:cfg.nFact*m3i, level:'upgTrunk'});
-        if(cfg.nFact>1) g.push({name:'Chain relay f_i→f_i+1', count:cfg.nFact-1, reqM3:(cfg.nFact-1)*m3i, level:'upgTrunk'});
-        g.push({name:'Last Factory→Launchpad (output)', count:1, reqM3:cfg.nFact*m3o, level:'upgTrunk'});
-      }else{
-        g.push({name:'Launchpad→f1 (trunk)', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
-        if(cfg.nFact>1) g.push({name:'Chain relay f_i→f_i+1', count:cfg.nFact-1, reqM3:(cfg.nFact-1)*m3io, level:'upgTrunk'});
-        g.push({name:'Last Factory→Launchpad', count:1, reqM3:cfg.nFact*m3io, level:'upgTrunk'});
-      }
+    }else{
+      g.push({name:'Factory↔Launchpad (feed)', count:cfg.nFact*L, reqM3:req, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
     }
   }
   return g;
@@ -824,10 +748,11 @@ function evaluate(cfg, autoUpg){
   const add=(k,n)=>{ if(n<=0) return; const st=STRUCT[k]; structs.push({name:`${st.name} ×${n}`, cpu:st.cpu*n, pg:st.pg*n}); sCpu+=st.cpu*n; sPg+=st.pg*n; };
   if(cfg.mode==='mining'){
     add('basic',cfg.nFact); add('ecu',cfg.nEcu); add('head',cfg.nEcu*cfg.nHead);
+    add('storage',cfg.nStor); add('launchpad',cfg.nLpad);
   }else{
     add(TIERS[cfg.tier].fact,cfg.nFact);
+    add('launchpad',factoryL(cfg));
   }
-  add('storage',cfg.nStor); add('launchpad',cfg.nLpad);
 
   const groups=buildLinkGroups(cfg);
   let lCpu=0, lPg=0, uCpu=0, uPg=0;
@@ -843,7 +768,8 @@ function evaluate(cfg, autoUpg){
     lCpu+=bCpu*gr.count; lPg+=bPg*gr.count;
     uCpu+=ver.levels[lvl].cpu*gr.count; uPg+=ver.levels[lvl].pg*gr.count;
     rows.push({name:gr.name, count:gr.count, flow:gr.flowUnits!=null?gr.flowUnits:Math.round(req*24/(gr.vol||1)), vol:gr.vol,
-               req:req, lvl:lvl, suggest:suggest, cap:cap, ok:ok, used:(req/cap*100)});
+               req:req, lvl:lvl, suggest:suggest, cap:cap, ok:ok, used:(req/cap*100),
+               len:Math.round(len), bCpu:bCpu, bPg:bPg, uCpu:ver.levels[lvl].cpu, uPg:ver.levels[lvl].pg});
   }
   const totCpu=sCpu+lCpu+uCpu, totPg=sPg+lPg+uPg;
   return {
@@ -879,7 +805,7 @@ function update(){
   }
   populateLayoutSub();
   let cfg=readCfg();
-  // auto-fit: when on, N always = max structurally feasible for the config (incl. buffer storage when D>1)
+  // auto-fit: when on, N always = max structurally feasible for the config
   if($id('nAuto').checked){
     const maxN=maxFeasibleN(cfg);
     if(maxN>=0 && cfg.nFact!==maxN){
@@ -888,21 +814,6 @@ function update(){
     }
   }
   $id('nFact').disabled=$id('nAuto').checked;
-  // factory buffer auto-fit: when D>1 and auto on, sync storage to D-day need and upgTrunk to fill level
-  if(cfg.mode==='factory' && cfg.days>1 && cfg.dAuto){
-    const Sneed=bufferNeed(cfg,cfg.nFact).Sneed;
-    if($id('nStor').value!=Sneed){
-      $id('nStor').value=Sneed;
-      cfg=readCfg();
-    }
-    const bl=bufferLv(cfg);
-    if(parseInt($id('upgTrunk').value,10)!==bl){
-      $id('upgTrunk').value=bl;
-      cfg=readCfg();
-    }
-  }
-  $id('nStor').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
-  $id('upgTrunk').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
   const ver=cfg.ver;
   populateFactoryProd();
   // upgrade level dropdown max
@@ -928,9 +839,10 @@ function showHide(cfg){
   $id('miningHead').style.display=cfg.mode==='mining'?'':'none';
   $id('tierRow').style.display=cfg.mode==='factory'?'':'none';
   $id('prodRow').style.display=cfg.mode==='factory'?'':'none';
-  $id('daysRow').style.display=cfg.mode==='factory'?'':'none';
-  $id('dAutoRow').style.display=cfg.mode==='factory'?'':'none';
-  $id('trunkRow').style.display=layoutSubOf(cfg)==='full'?'none':'';
+  $id('fModeRow').style.display=cfg.mode==='factory'?'':'none';
+  $id('storRow').style.display=cfg.mode==='mining'?'':'none';
+  $id('lpadRow').style.display=cfg.mode==='mining'?'':'none';
+  $id('trunkRow').style.display=(cfg.mode==='mining'&&layoutSubOf(cfg)!=='full')?'':'none';
   $id('mapRow').style.display=cfg.ver.id==='new'?'':'none';
   $id('resSupplyHead').style.display=cfg.mode==='mining'?'':'none';
   $id('resSupply').style.display=cfg.mode==='mining'?'':'none';
@@ -938,9 +850,6 @@ function showHide(cfg){
   $id('resFactory').style.display=cfg.mode==='factory'?'':'none';
   $id('resBufHead').style.display=cfg.mode==='factory'?'':'none';
   $id('resBuf').style.display=cfg.mode==='factory'?'':'none';
-  // storage and trunk links are locked when factory + D>1 + auto buffer
-  $id('nStor').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
-  $id('upgTrunk').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
 }
 function statusTag(ok){
   return ok?'<span class="tag tag-ok">OK</span>':'<span class="tag tag-bad">Over</span>';
@@ -967,18 +876,20 @@ function renderStatus(r){
   $id('resStatus').innerHTML=parts.join('　')+'　'+msg;
 }
 function renderLinks(r, cfg){
-  let h='<tr><th class="l">Link</th><th>#</th><th>Flow (units/day)</th><th>Needed m³/h</th><th>Capacity m³/h</th><th>Suggested</th><th>Set</th><th>Usage</th><th>Status</th></tr>';
+  let h='<tr><th class="l">Link</th><th>#</th><th>Length km</th><th>Build+Upgrade per link<br>CPU/PG</th><th>Flow (units/day)</th><th>Needed m³/h</th><th>Capacity m³/h</th><th>Suggested</th><th>Set</th><th>Usage</th><th>Status</th></tr>';
   for(const x of r.rows){
     const need=x.ok?'':'<span class="tag tag-warn">Upgrade</span>';
     const lvlCls=x.ok?'':'class="warn"';
+    const cost=(x.bCpu!=null&&x.uCpu!=null)?`${Math.round(x.bCpu)}+${x.uCpu} / ${Math.round(x.bPg)}+${x.uPg}`:'—';
     h+=`<tr><td class="l">${x.name}</td><td class="mono">${x.count}</td>
+      <td class="mono">${fmt(x.len)}</td><td class="mono">${cost}</td>
       <td class="mono">${fmt(x.flow)}</td><td class="mono">${fmt1(x.req)}</td>
       <td class="mono">${fmt(x.cap)}</td>
       <td class="mono">${x.suggest}</td><td class="mono ${lvlCls}">${x.lvl}</td>
       <td class="mono ${x.used>100?'bad':x.used>85?'warn':''}">${Math.round(x.used)}%</td>
       <td>${x.ok?'':'<span class="tag tag-warn">Bottleneck</span>'}</td></tr>`;
   }
-  if(r.rows.length===0) h='<tr><td colspan="9" class="l">No links (factory count = 0)</td></tr>';
+  if(r.rows.length===0) h='<tr><td colspan="11" class="l">No links (factory count = 0)</td></tr>';
   $id('resLinks').innerHTML=h;
 }
 function renderSupply(r, cfg){
@@ -1020,29 +931,22 @@ function renderFactory(cfg){
   $id('resFactory').innerHTML=h;
 }
 function renderBuffer(cfg){
-  const b=bufferNeed(cfg,cfg.nFact);
-  const f=b.f;
-  const fits=b.A>=b.need;
-  const more=Math.max(0,b.Sneed-cfg.nStor);
+  const L=factoryL(cfg);
+  const {types,inTotal,outM3}=inputTypesM3(cfg);
+  const days=maintainDays(cfg);
   const t=TIERS[cfg.tier];
+  const fmtD=x=> x<1? (Math.round(x*100)/100).toLocaleString('zh-CN') : fmt1(x);
+  const modeTxt=cfg.fMode==='long'?'Long-maintenance (1 launchpad per input type)':'Efficiency (single launchpad for all inputs/outputs)';
   let h=`<table><tr><th class="l">Item</th><th>Value</th></tr>`;
-  h+=`<tr><td class="l">Input/output per factory (${t.label})</td><td class="mono">${fmt1(f.inM3)} / ${fmt1(f.outM3)} m³/day</td></tr>`;
-  h+=`<tr><td class="l">Total for ${cfg.nFact} factories input/output</td><td class="mono">${fmt1(f.inM3*cfg.nFact)} / ${fmt1(f.outM3*cfg.nFact)} m³/day</td></tr>`;
-  h+=`<tr><td class="l">Buffer capacity A (${cfg.nStor} storage + ${cfg.nLpad} launchpad)</td><td class="mono">${fmt(b.A)} m³</td></tr>`;
-  h+=`<tr><td class="l">Input buffer lasts</td><td class="mono">${fmt1(b.inDays)} days</td></tr>`;
-  h+=`<tr><td class="l">Output buffer lasts</td><td class="mono">${fmt1(b.outDays)} days</td></tr>`;
-  h+=`<tr><td class="l">Requirement R (N×max×D=${cfg.days})</td><td class="mono">${fmt(b.need)} m³</td></tr>`;
-  h+=`<tr><td class="l">Storage needed to meet / short</td><td class="mono">${b.Sneed} / ${more}</td></tr>`;
-  if(cfg.nStor>0){
-    const fill=fillM3PerLink(cfg);
-    const lv=bufferLv(cfg);
-    const curLv=cfg.days>1&&cfg.dAuto?lv:Math.min(parseInt($id('upgTrunk').value,10)||0, cfg.ver.levels.length-1);
-    const hrs=fillHoursAt(cfg,curLv);
-    h+=`<tr><td class="l">Expedited-transfer rate/link (D days÷${FILL_HOURS}h÷${cfg.nStor} storage)</td><td class="mono">${fmt1(fill)} m³/h → suggest Lv ${lv}</td></tr>`;
-    h+=`<tr><td class="l">Time to fill at Lv ${curLv}</td><td class="mono">${fmt1(hrs)} h ${hrs>FILL_HOURS?'<span class="tag tag-warn">slow</span>':'<span class="tag tag-ok">OK</span>'}</td></tr>`;
-    h+=`<tr><td class="l" colspan="2" style="text-align:left;font-size:12px;color:#57606a;">⚠ No route is possible between launchpad and storage — refill via <b>Expedited Transfer</b>: import P1/P2/P3 to the launchpad, then expedite-transfer to storage (each transfer has a cooldown; higher link Lv = faster). Storage→factory routes are pre-configured.</td></tr>`;
+  h+=`<tr><td class="l">Mode</td><td class="l">${modeTxt} (${L} launchpads × 10,000 m³)</td></tr>`;
+  for(let i=0;i<types.length;i++){
+    const ty=types[i];
+    h+=`<tr><td class="l">Input type ${i+1} per factory/day</td><td class="mono">${fmt(ty.q*24)} units ≈ ${fmt1(ty.m3day)} m³</td></tr>`;
   }
-  h+=`<tr><td class="l">Maintenance interval</td><td>${fits?'<span class="tag tag-ok">Covers '+cfg.days+' days</span>':'<span class="tag tag-bad">Insufficient — runs out within D days</span>'}</td></tr>`;
+  h+=`<tr><td class="l">Total input consumed by ${cfg.nFact} factories</td><td class="mono">${fmt1(inTotal*cfg.nFact)} m³/day</td></tr>`;
+  h+=`<tr><td class="l">Total output produced by ${cfg.nFact} factories</td><td class="mono">${fmt1(outM3*cfg.nFact)} m³/day</td></tr>`;
+  h+=`<tr><td class="l">No-maintenance span (until input runs out)</td><td class="mono">${fmtD(days)} days ${days>=1?'<span class="tag tag-ok">overnight / next-day pickup OK</span>':(days>0?'<span class="tag tag-warn">needs frequent refill</span>':'<span class="tag tag-bad">cannot self-sustain</span>')}</td></tr>`;
+  h+=`<tr><td class="l" colspan="2" style="text-align:left;font-size:12px;color:#57606a;">Note: launchpads only load/unload (import input, export output); no storage hub is used. After X days the input runs out and factories halt; resupply on your next visit resumes full production. ${cfg.fMode==='eff'?'Efficiency mode mixes everything on one launchpad, so X is usually under 1 day — for frequent logins.':'Long-maintenance mode dedicates one launchpad per input type, stretching X — for every-other-day or every-few-days logins.'}</td></tr>`;
   h+=`</table>`;
   $id('resBuf').innerHTML=h;
 }
@@ -1050,16 +954,8 @@ function maxFeasibleN(cfg){
   let best=-1;
   for(let N=0;N<=40;N++){
     const c2={...cfg, nFact:N};
-    if(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto){
-      // D-buffer mode: storage = Sneed, single upgTrunk = bufferLv (consistent with display/export)
-      c2.nStor=bufferNeed(cfg,N).Sneed;
-      c2.upgTrunk=bufferLv(c2);
-      const r=evaluate(c2,false);
-      if(r.cpuOk&&r.pgOk) best=N; else break;
-    }else{
-      const r=evaluate(c2,true);
-      if(r.cpuOk&&r.pgOk) best=N; else break;
-    }
+    const r=evaluate(c2,true);
+    if(r.cpuOk&&r.pgOk) best=N; else break;
   }
   return best;
 }
@@ -1134,7 +1030,7 @@ function selfCheck(){
 }
 
 /* ================= Events ================= */
-const bindIds=['ccu','mode','tier','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','daysMain','dAuto','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
+const bindIds=['ccu','mode','tier','fMode','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
 for(const id of bindIds) $id(id).addEventListener('input',update);
 $id('btnExport').addEventListener('click',exportJSON);
 $id('btnCopy').addEventListener('click',copyJSON);
