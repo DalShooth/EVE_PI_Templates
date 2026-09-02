@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -95,6 +95,15 @@
         <div class="row">
           <label>Launchpad Count L</label>
           <input type="number" id="nLpad" value="1" min="1" max="10" step="1">
+        </div>
+        <div class="row" id="daysRow" style="display:none;">
+          <label>Maintenance Interval D (days)</label>
+          <input type="number" id="daysMain" value="1" min="1" max="30" step="1">
+          <div class="hint">Days between resupply visits; when D&gt;1 the input/output buffer must cover D days</div>
+        </div>
+        <div class="row" id="dAutoRow" style="display:none;">
+          <label><input type="checkbox" id="dAuto" checked style="flex:0; width:auto; min-width:0;"> Auto-size buffer for D</label>
+          <div class="hint">On: auto-add storage to cover D days and reduce factory count; Off: show suggestion only</div>
         </div>
       </div>
 
@@ -233,6 +242,9 @@
 
       <h2 id="resFactoryHead">Factory Daily Throughput</h2>
       <div class="panel" id="resFactory"></div>
+
+      <h2 id="resBufHead">Buffer Assessment (maintenance interval)</h2>
+      <div class="panel" id="resBuf"></div>
 
       <h2>Link Throughput Bottleneck Check</h2>
       <div class="panel">
@@ -519,7 +531,7 @@ function buildFactoryTemplate(cfg){
   if(sub==='full' || sub==='semistar'){
     // Launchpad hub: launchpad centered, one link per factory
     for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,lo0,null,pl.lp));
-    for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*0.9); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
+    for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/Math.max(cfg.nStor,1)); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
     for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,ringRho(cfg,cfg.nFact), Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,prod.id,struct)); }
     for(let i=0;i<fact.length;i++) links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]});
     stLp();
@@ -543,7 +555,7 @@ function buildFactoryTemplate(cfg){
       for(let k=0;k<P;k++){ fact.push(addPin(la0,cur,prod.id,struct)); cur+=0.013; if(k<S){ fact.push(addPin(la0,cur,prod.id,struct)); cur+=0.013; } }
     }else{
       for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,lo0,null,pl.lp));
-      for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*0.9); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
+      for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/Math.max(cfg.nStor,1)); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
       const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
       const rhoP=ringRho(cfg,P);
       for(let k=0;k<P;k++){
@@ -664,6 +676,8 @@ function readCfg(){
     nFact:int('nFact',8),
     nStor:int('nStor',1),
     nLpad:int('nLpad',1),
+    days:int('daysMain',1),
+    dAuto:$id('dAuto').checked,
     nEcu:int('nEcu',1),
     nHead:int('nHead',10),
     yield:num('yield',1150000),
@@ -685,6 +699,22 @@ function readCfg(){
 function suggestLevel(ver, reqM3){
   for(let i=0;i<ver.levels.length;i++) if(ver.levels[i].cap>=reqM3) return i;
   return ver.levels.length-1;
+}
+/* Per-factory daily input/output volume m³ for the selected tier */
+function tierFlowM3(cfg){
+  const t=TIERS[cfg.tier];
+  const inM3=t.in*cfg[t.inV], outM3=t.out*cfg[t.outV];
+  return {inM3:inM3, outM3:outM3, maxM3:Math.max(inM3,outM3)};
+}
+/* D-day buffer: need R=N×max(in,out)×D; available A=L×10000+S×12000 */
+function bufferNeed(cfg,N){
+  const f=tierFlowM3(cfg);
+  const A=cfg.nLpad*10000 + cfg.nStor*12000;
+  const need=N*f.maxM3*cfg.days;
+  const Sneed=Math.max(0, Math.ceil((need - cfg.nLpad*10000)/12000));
+  const inDays=N*f.inM3>0?A/(N*f.inM3):Infinity;
+  const outDays=N*f.outM3>0?A/(N*f.outM3):Infinity;
+  return {f:f, A:A, need:need, Sneed:Sneed, inDays:inDays, outDays:outDays};
 }
 
 /* ================= Link Groups ================= */
@@ -797,7 +827,7 @@ function update(){
   }
   populateLayoutSub();
   let cfg=readCfg();
-  // auto-fit: when on, N always = max structurally feasible for the config
+  // auto-fit: when on, N always = max structurally feasible for the config (incl. buffer storage when D>1)
   if($id('nAuto').checked){
     const maxN=maxFeasibleN(cfg);
     if(maxN>=0 && cfg.nFact!==maxN){
@@ -806,6 +836,15 @@ function update(){
     }
   }
   $id('nFact').disabled=$id('nAuto').checked;
+  // factory buffer auto-fit: when D>1 and auto on, sync storage count to what D days require
+  if(cfg.mode==='factory' && cfg.days>1 && cfg.dAuto){
+    const Sneed=bufferNeed(cfg,cfg.nFact).Sneed;
+    if($id('nStor').value!=Sneed){
+      $id('nStor').value=Sneed;
+      cfg=readCfg();
+    }
+  }
+  $id('nStor').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
   const ver=cfg.ver;
   populateFactoryProd();
   // upgrade level dropdown max
@@ -816,6 +855,7 @@ function update(){
   renderLinks(r, cfg);
   renderSupply(r, cfg);
   renderFactory(cfg);
+  renderBuffer(cfg);
   renderMaxN(cfg);
   renderExport(cfg);
   showHide(cfg);
@@ -830,12 +870,18 @@ function showHide(cfg){
   $id('miningHead').style.display=cfg.mode==='mining'?'':'none';
   $id('tierRow').style.display=cfg.mode==='factory'?'':'none';
   $id('prodRow').style.display=cfg.mode==='factory'?'':'none';
+  $id('daysRow').style.display=cfg.mode==='factory'?'':'none';
+  $id('dAutoRow').style.display=cfg.mode==='factory'?'':'none';
   $id('trunkRow').style.display=layoutSubOf(cfg)==='full'?'none':'';
   $id('mapRow').style.display=cfg.ver.id==='new'?'':'none';
   $id('resSupplyHead').style.display=cfg.mode==='mining'?'':'none';
   $id('resSupply').style.display=cfg.mode==='mining'?'':'none';
   $id('resFactoryHead').style.display=cfg.mode==='factory'?'':'none';
   $id('resFactory').style.display=cfg.mode==='factory'?'':'none';
+  $id('resBufHead').style.display=cfg.mode==='factory'?'':'none';
+  $id('resBuf').style.display=cfg.mode==='factory'?'':'none';
+  // storage is locked when factory + D>1 + auto buffer
+  $id('nStor').disabled=(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto);
 }
 function statusTag(ok){
   return ok?'<span class="tag tag-ok">OK</span>':'<span class="tag tag-bad">Over</span>';
@@ -914,10 +960,30 @@ function renderFactory(cfg){
   h+=`</table>`;
   $id('resFactory').innerHTML=h;
 }
+function renderBuffer(cfg){
+  const b=bufferNeed(cfg,cfg.nFact);
+  const f=b.f;
+  const fits=b.A>=b.need;
+  const more=Math.max(0,b.Sneed-cfg.nStor);
+  const t=TIERS[cfg.tier];
+  let h=`<table><tr><th class="l">Item</th><th>Value</th></tr>`;
+  h+=`<tr><td class="l">Input/output per factory (${t.label})</td><td class="mono">${fmt1(f.inM3)} / ${fmt1(f.outM3)} m³/day</td></tr>`;
+  h+=`<tr><td class="l">Total for ${cfg.nFact} factories input/output</td><td class="mono">${fmt1(f.inM3*cfg.nFact)} / ${fmt1(f.outM3*cfg.nFact)} m³/day</td></tr>`;
+  h+=`<tr><td class="l">Buffer capacity A (${cfg.nStor} storage + ${cfg.nLpad} launchpad)</td><td class="mono">${fmt(b.A)} m³</td></tr>`;
+  h+=`<tr><td class="l">Input buffer lasts</td><td class="mono">${fmt1(b.inDays)} days</td></tr>`;
+  h+=`<tr><td class="l">Output buffer lasts</td><td class="mono">${fmt1(b.outDays)} days</td></tr>`;
+  h+=`<tr><td class="l">Requirement R (N×max×D=${cfg.days})</td><td class="mono">${fmt(b.need)} m³</td></tr>`;
+  h+=`<tr><td class="l">Storage needed to meet / short</td><td class="mono">${b.Sneed} / ${more}</td></tr>`;
+  h+=`<tr><td class="l">Maintenance interval</td><td>${fits?'<span class="tag tag-ok">Covers '+cfg.days+' days</span>':'<span class="tag tag-bad">Insufficient — runs out within D days</span>'}</td></tr>`;
+  h+=`</table>`;
+  $id('resBuf').innerHTML=h;
+}
 function maxFeasibleN(cfg){
   let best=-1;
   for(let N=0;N<=40;N++){
     const c2={...cfg, nFact:N};
+    // factory + D>1 + auto buffer: storage count = needed for D days
+    if(cfg.mode==='factory'&&cfg.days>1&&cfg.dAuto) c2.nStor=bufferNeed(cfg,N).Sneed;
     const r=evaluate(c2,true);
     if(r.cpuOk&&r.pgOk) best=N; else break;
   }
@@ -994,7 +1060,7 @@ function selfCheck(){
 }
 
 /* ================= Events ================= */
-const bindIds=['ccu','mode','tier','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
+const bindIds=['ccu','mode','tier','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','daysMain','dAuto','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
 for(const id of bindIds) $id(id).addEventListener('input',update);
 $id('btnExport').addEventListener('click',exportJSON);
 $id('btnCopy').addEventListener('click',copyJSON);
@@ -1002,3 +1068,4 @@ window.addEventListener('DOMContentLoaded',()=>{ populateMiningRes(); populateLa
 </script>
 </body>
 </html>
+
