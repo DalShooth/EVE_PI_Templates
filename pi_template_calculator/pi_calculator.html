@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EVE PI 模板极限计算器 (P0→P4)</title>
+<style>
+  :root { --ok:#1a7f37; --warn:#b45309; --bad:#b91c1c; --line:#d0d7de; --bg:#f6f8fa; }
+  * { box-sizing:border-box; }
+  body { font-family:"Microsoft YaHei",Arial,sans-serif; margin:0; background:var(--bg); color:#24292f; }
+  header { background:#24292f; color:#fff; padding:12px 20px; }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:4px 0 0; font-size:12px; color:#c9d1d9; }
+  main { max-width:1200px; margin:0 auto; padding:16px 20px 60px; }
+  h2 { font-size:15px; border-bottom:1px solid var(--line); padding-bottom:4px; margin:20px 0 10px; }
+  .grid { display:grid; grid-template-columns:380px 1fr; gap:16px; align-items:start; }
+  @media(max-width:900px){ .grid { grid-template-columns:1fr; } }
+  .panel { background:#fff; border:1px solid var(--line); border-radius:6px; padding:14px; }
+  .row { display:flex; align-items:center; gap:8px; margin:7px 0; flex-wrap:wrap; }
+  .row label { width:170px; font-size:13px; color:#57606a; }
+  .row input[type=number], .row select { flex:1; min-width:90px; padding:4px 6px; border:1px solid var(--line); border-radius:4px; font-size:13px; }
+  .hint { font-size:11px; color:#8b949e; margin:2px 0 0 178px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; margin-top:6px; }
+  th, td { border:1px solid var(--line); padding:4px 8px; text-align:right; }
+  th { background:#f1f3f5; }
+  td.l, th.l { text-align:left; }
+  .ok { color:var(--ok); font-weight:bold; }
+  .warn { color:var(--warn); font-weight:bold; }
+  .bad { color:var(--bad); font-weight:bold; }
+  .mono { font-variant-numeric:tabular-nums; }
+  .big { font-size:15px; }
+  .summary td:first-child { text-align:left; font-weight:bold; }
+  .tag { display:inline-block; padding:1px 6px; border-radius:3px; font-size:11px; }
+  .tag-ok { background:#dafbe1; color:var(--ok); }
+  .tag-warn { background:#fff8c5; color:var(--warn); }
+  .tag-bad { background:#ffebe9; color:var(--bad); }
+  details { margin-top:8px; }
+  details summary { cursor:pointer; font-size:13px; color:#57606a; }
+  #resSelfcheck { font-size:12px; color:#57606a; white-space:pre-wrap; }
+  .foot { font-size:11px; color:#8b949e; margin-top:24px; border-top:1px solid var(--line); padding-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>EVE PI 模板极限计算器</h1>
+  <p>CCU 预算 · CPU/PG 核算 · 链路版本切换 · 链路吞吐瓶颈检测 · CCU0-5 极限厂数</p>
+</header>
+
+<main>
+  <div class="grid">
+    <!-- ============ 配置 ============ -->
+    <div>
+      <h2>基础配置</h2>
+      <div class="panel">
+        <div class="row">
+          <label>指挥中心等级 (CCU)</label>
+          <select id="ccu">
+            <option value="0">0</option><option value="1">1</option><option value="2">2</option>
+            <option value="3">3</option><option value="4">4</option><option value="5" selected>5</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>模式</label>
+          <select id="mode">
+            <option value="mining" selected>矿点 P0→P1（基础厂）</option>
+            <option value="factory">工厂（输入成品加工）</option>
+          </select>
+        </div>
+        <div class="row" id="tierRow">
+          <label>加工层级</label>
+          <select id="tier">
+            <option value="P1P2" selected>P1→P2（高级厂）</option>
+            <option value="P2P3">P2→P3（高级厂）</option>
+            <option value="P3P4">P3→P4（高科技厂，仅荒芜/温带）</option>
+          </select>
+        </div>
+        <div class="row" id="prodRow" style="display:none;">
+          <label>目标产品</label>
+          <select id="factoryProd"></select>
+          <div class="hint">按加工层级过滤的产物列表</div>
+        </div>
+        <div class="row" id="fModeRow" style="display:none;">
+          <label>工厂模式</label>
+          <select id="fMode">
+            <option value="eff" selected>效率模式（单发射台）</option>
+            <option value="long">长维护模式（每输入类型 1 发射台）</option>
+          </select>
+          <div class="hint">效率：1 台全厂直接供料（满台约 1 天）；长维护：每种输入独享 1 台、满台可撑数天（发射台贵，厂数略降）</div>
+        </div>
+        <div class="row">
+          <label>工厂数量 N</label>
+          <input type="number" id="nFact" value="8" min="0" max="40" step="1">
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="nAuto" checked style="flex:0; width:auto; min-width:0;"> 工厂数自动适配 CCU/配置</label>
+          <div class="hint">开：N 始终=当前 CCU/拓扑/半径下结构可行最大值（改 CCU 自动升降）；关：手动输入</div>
+        </div>
+        <div class="row" id="storRow">
+          <label>仓库数 S（采集器→工厂 P0 缓冲）</label>
+          <input type="number" id="nStor" value="1" min="0" max="20" step="1">
+          <div class="hint">矿点专用；防采集量大时工厂处理不过来而溢出。发射台自带 10,000 m³ 计入缓冲</div>
+        </div>
+        <div class="row" id="lpadRow">
+          <label>发射台数量 L（矿点）</label>
+          <input type="number" id="nLpad" value="1" min="1" max="10" step="1">
+          <div class="hint">矿点模式手动；工厂模式发射台数由所选模式决定</div>
+        </div>
+      </div>
+
+      <h2 id="miningHead">矿点配置</h2>
+      <div class="panel" id="miningPanel">
+        <div class="row">
+          <label>提取器 ECU 数</label>
+          <input type="number" id="nEcu" value="1" min="1" max="6" step="1">
+        </div>
+        <div class="row">
+          <label>每 ECU 提取头数</label>
+          <input type="number" id="nHead" value="10" min="0" max="10" step="1">
+          <div class="hint">每头 110 CPU / 550 PG，≤10/ECU</div>
+        </div>
+        <div class="row">
+          <label>估算日产量 (P0/天)</label>
+          <input type="number" id="yield" value="1150000" min="0" step="10000">
+          <div class="hint">普通约 1.15M；虫洞高产可达 2M</div>
+        </div>
+        <div class="row">
+          <label>开采资源 (P0)</label>
+          <select id="miningRes"></select>
+          <div class="hint">选择 P0→P1 配方（自动填充产物 ID）</div>
+        </div>
+      </div>
+
+      <h2>行星与布局</h2>
+      <div class="panel">
+        <div class="row">
+          <label>行星半径 r (km)</label>
+          <input type="number" id="radius" value="5000" min="2500" step="100">
+        </div>
+        <div class="row">
+          <label>行星类型 (模板基准)</label>
+          <select id="pln">
+            <option value="11">温和</option>
+            <option value="12">冰体</option>
+            <option value="13">气体</option>
+            <option value="2014">海洋</option>
+            <option value="2015" selected>熔岩</option>
+            <option value="2016">贫瘠</option>
+            <option value="2017">风暴</option>
+            <option value="2063">等离子</option>
+          </select>
+          <div class="hint">导出模板使用该行星的建筑 ID；放任意行星游戏会自动转换</div>
+        </div>
+        <div class="row">
+          <label>布局大类</label>
+          <select id="layout">
+            <option value="star" selected>星型</option>
+            <option value="chain">链式</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>布局子型</label>
+          <select id="layoutSub"></select>
+          <div class="hint" id="layoutHint">全直连：每厂独立直连仓库+发射台（链路多、最鲁棒）</div>
+        </div>
+        <div class="row">
+          <label>链路段数系数</label>
+          <input type="number" id="seg" value="1.5" min="0.5" step="0.1">
+          <div class="hint">链路长度 = seg × 最小间距(0.012008578×r) km</div>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="segAuto" checked style="flex:0; width:auto; min-width:0;"> 按布局自动估算</label>
+          <div class="hint">勾选：星型 ≈1.5 倍、链式 ≈1.0 倍；取消后可手动输入 seg</div>
+        </div>
+      </div>
+
+      <h2>链路版本与升级</h2>
+      <div class="panel">
+        <div class="row">
+          <label>链路版本</label>
+          <select id="linkVer">
+            <option value="old" selected>旧版 (2022) · 基础 250 m³/h · 10 级</option>
+            <option value="new">新版 (2026) · 基础 1,250 m³/h · 5 级</option>
+          </select>
+        </div>
+        <div class="row" id="mapRow">
+          <label>新版映射口径</label>
+          <select id="mapMode">
+            <option value="floor" selected>向下取整（旧档 ≤ 容量）</option>
+            <option value="ceil">向上取整（旧档 ≥ 容量）</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>ECU→仓库 链路升级</label>
+          <select id="upgEcu"><option value="0" selected>0</option></select>
+          <div class="hint">承载全部 P0 流量的关键链路</div>
+        </div>
+        <div class="row" id="trunkRow">
+          <label>枢纽/干路链路升级</label>
+          <select id="upgTrunk"><option value="0" selected>0</option></select>
+          <div class="hint">枢纽式：仓库→发射台(P1)、仓库→主干厂；串联式：仓库→f1 干路。正常产量下通常无需升级</div>
+        </div>
+        <div class="row">
+          <label>其余链路升级</label>
+          <select id="upgOther"><option value="0" selected>0</option></select>
+          <div class="hint">全直连的 仓库→工厂/工厂→发射台、枢纽的 主干→支线 等</div>
+        </div>
+      </div>
+
+      <h2>物量 (m³/单位)</h2>
+      <div class="panel">
+        <div class="row"><label>P0 体积</label><input type="number" id="vP0" value="0.005" min="0.001" step="0.001"></div>
+        <div class="row"><label>P1 体积</label><input type="number" id="vP1" value="0.19" min="0.05" step="0.01"></div>
+        <div class="row"><label>P2 体积</label><input type="number" id="vP2" value="0.75" min="0.1" step="0.05"></div>
+        <div class="row"><label>P3 体积</label><input type="number" id="vP3" value="6" min="1" step="0.5"></div>
+        <div class="row"><label>P4 体积</label><input type="number" id="vP4" value="50" min="5" step="5"></div>
+      </div>
+    </div>
+
+    <!-- ============ 结果 ============ -->
+    <div>
+      <h2>导出模板</h2>
+      <div class="panel">
+        <div class="row">
+          <button id="btnExport" type="button" style="padding:6px 18px;font-size:14px;font-weight:bold;">导出模板 JSON</button>
+          <button id="btnCopy" type="button" style="padding:6px 18px;font-size:14px;">复制 JSON 到剪贴板</button>
+        </div>
+        <div class="hint">复制后可直接在游戏行星工业的模板编辑界面粘贴测试；确认无误再点"导出模板 JSON"保存文件。矿点模板的提取头与提取器→仓库路线需在游戏内自行设置（CCP 机制）。</div>
+        <details>
+          <summary>模板 JSON 预览</summary>
+          <pre id="resExport" style="font-size:11px;max-height:280px;overflow:auto;white-space:pre-wrap;margin:6px 0 0;background:#f6f8fa;padding:8px;border:1px solid #d0d7de;border-radius:4px;"></pre>
+        </details>
+      </div>
+
+      <h2>CPU / PG 核算</h2>
+      <div class="panel">
+        <table id="resSummary" class="summary"></table>
+        <div id="resStatus" style="margin-top:6px;"></div>
+      </div>
+
+      <h2 id="resSupplyHead">供给评估</h2>
+      <div class="panel" id="resSupply"></div>
+
+      <h2 id="resFactoryHead">工厂日吞吐</h2>
+      <div class="panel" id="resFactory"></div>
+
+      <h2 id="resBufHead">免维护评估（发射台阵列）</h2>
+      <div class="panel" id="resBuf"></div>
+
+      <h2>链路吞吐瓶颈检测</h2>
+      <div class="panel">
+        <table id="resLinks"></table>
+        <div class="hint" style="margin:4px 0 0;">所需 m³/h = 流量(单位/天) × 体积(m³) ÷ 24；超过容量即瓶颈，需升级链路（升级吃 CPU/PG）。</div>
+      </div>
+
+      <h2>CCU 0-5 极限厂数（当前参数）</h2>
+      <div class="panel">
+        <table id="resMaxN"></table>
+        <div class="hint" style="margin:4px 0 0;">自动按"满足容量所需的最低升级等级"估算结构性上限。矿点模式另受供给极限约束：普通 1.0-1.3M/天、虫洞可达 2M/天，单 ECU 通常仅支撑 ≤8 厂 24h 运转（9-10 厂结构可行但供给喂不饱）。</div>
+      </div>
+
+      <details>
+        <summary>自检 / 数值校验（复现 README 与 EVE Uni 数据）</summary>
+        <div class="panel"><div id="resSelfcheck"></div></div>
+      </details>
+
+      <div class="foot">
+        数据来源：EVE Uni (Planetary buildings / Setting up / Planetary Industry)，ESI 类型数据核对，README 表反推验证一致。<br>
+        建筑成本：基础厂 200/800 · 高级厂 500/700 · 高科技厂 1100/400 · ECU 400/2600 · 提取头 110/550 · 仓库 500/700 · 发射台 3600/700。<br>
+        链路建造：CPU=15+0.2×l，PG=10+0.15×l（l=km）；提取头→ECU 连接免费。
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+'use strict';
+/* ================= 数据 ================= */
+const CCU_BUDGET = [
+  {cpu:1675,  pg:6000 },
+  {cpu:7057,  pg:9000 },
+  {cpu:12136, pg:12000},
+  {cpu:17215, pg:15000},
+  {cpu:21315, pg:17000},
+  {cpu:25415, pg:19000},
+];
+const STRUCT = {
+  basic:    {cpu:200,  pg:800,  name:'基础厂(P1)'},
+  advanced: {cpu:500,  pg:700,  name:'高级厂(P2/P3)'},
+  hightech: {cpu:1100, pg:400,  name:'高科技厂(P4)'},
+  ecu:      {cpu:400,  pg:2600, name:'提取器(ECU)'},
+  head:     {cpu:110,  pg:550,  name:'提取头'},
+  storage:  {cpu:500,  pg:700,  name:'仓库'},
+  launchpad:{cpu:3600, pg:700,  name:'发射台'},
+};
+/* 旧版升级成本 = 官方表(500km基准)总耗减建造基值115/85后的增量 */
+const UPGRADE_OLD = [
+  {cap:250,    cpu:0,   pg:0  },
+  {cap:500,    cpu:165, pg:98 },
+  {cap:1000,   cpu:366, pg:206},
+  {cap:2000,   cpu:598, pg:322},
+  {cap:4000,   cpu:853, pg:443},
+  {cap:8000,   cpu:1130,pg:570},
+  {cap:16000,  cpu:1427,pg:701},
+  {cap:32000,  cpu:1740,pg:836},
+  {cap:64000,  cpu:2070,pg:974},
+  {cap:128000, cpu:2415,pg:1115},
+  {cap:256000, cpu:2774,pg:1259},
+];
+const NEW_CAPS = [1250, 2500, 5000, 10000, 20000, 40000];
+function buildNewLevels(mapMode){
+  return NEW_CAPS.map(c=>{
+    let pick=UPGRADE_OLD[0];
+    for(const o of UPGRADE_OLD){
+      if(mapMode==='floor'){ if(o.cap<=c) pick=o; else break; }
+      else { if(o.cap>=c){ pick=o; break; } }
+    }
+    return {cap:c, cpu:pick.cpu, pg:pick.pg};
+  });
+}
+function getVersion(){
+  const ver = document.getElementById('linkVer').value;
+  if(ver==='old') return {id:'old', label:'旧版(2022)', levels:UPGRADE_OLD};
+  const mm = document.getElementById('mapMode').value;
+  return {id:'new', label:'新版(2026)', levels:buildNewLevels(mm)};
+}
+/* 工厂层级：每日输入/输出单位 */
+const TIERS = {
+  P1P2:{fact:'advanced', in:1920, out:120, inV:'vP1', outV:'vP2', label:'P1→P2',
+        note:'2×40 P1/h → 5 P2/h'},
+  P2P3:{fact:'advanced', in:720,  out:72,  inV:'vP2', outV:'vP3', label:'P2→P3',
+        note:'30 P2/h → 3 P3/h（每输入需 2 个 P2 厂供给）'},
+  P3P4:{fact:'hightech', in:432,  out:24,  inV:'vP3', outV:'vP4', label:'P3→P4',
+        note:'18 P3/h → 1 P4/h（每输入需 2 个 P3 厂供给；仅荒芜/温带）'},
+};
+const MINING_IN=144000, MINING_OUT=960;
+
+/* ================= 导出数据（从仓库模板/ESI 提取） ================= */
+const PLANETS={
+  11:{name:'温和', basic:2481, adv:0, ht:0, ecu:3068, stor:2562, lp:2256},
+  12:{name:'冰体', basic:2493, adv:0, ht:0, ecu:3061, stor:2257, lp:2552},
+  13:{name:'气体', basic:2492, adv:0, ht:0, ecu:3060, stor:2536, lp:2543},
+  2014:{name:'海洋', basic:2490, adv:0, ht:0, ecu:3063, stor:2535, lp:2542},
+  2015:{name:'熔岩', basic:2469, adv:0, ht:0, ecu:3062, stor:2558, lp:2555},
+  2016:{name:'贫瘠', basic:2473, adv:2474, ht:2475, ecu:2848, stor:2541, lp:2544},
+  2017:{name:'风暴', basic:2483, adv:0, ht:0, ecu:3067, stor:2561, lp:2557},
+  2063:{name:'等离子', basic:2471, adv:0, ht:0, ecu:3064, stor:2560, lp:2556},
+};
+const MINING_RES=[
+  {p0:2073,p0n:'微生物',p1:2393,p1n:'细菌'},
+  {p0:2267,p0n:'基础金属',p1:2398,p1n:'反应金属'},
+  {p0:2268,p0n:'水基液体',p1:3645,p1n:'水'},
+  {p0:2270,p0n:'贵金属',p1:2399,p1n:'稀有金属'},
+  {p0:2272,p0n:'重金属',p1:2400,p1n:'有毒金属'},
+  {p0:2286,p0n:'浮游生物群',p1:3779,p1n:'生物质'},
+  {p0:2287,p0n:'复杂有机生命体',p1:2395,p1n:'蛋白质'},
+  {p0:2288,p0n:'碳化合物',p1:2396,p1n:'生物燃料'},
+  {p0:2305,p0n:'自养生物',p1:2397,p1n:'工业纤维'},
+  {p0:2306,p0n:'非立方晶体',p1:2401,p1n:'手性结构'},
+  {p0:2307,p0n:'长英矿物岩浆',p1:9828,p1n:'硅'},
+  {p0:2308,p0n:'悬浮等离子',p1:2389,p1n:'等离子体团'},
+  {p0:2309,p0n:'离子溶液',p1:2390,p1n:'电解物'},
+  {p0:2310,p0n:'稀有气体',p1:3683,p1n:'氧'},
+  {p0:2311,p0n:'活性气体',p1:2392,p1n:'氧化剂'},
+];
+const PRODUCTS=[
+  {id:44, name:'核能燃料', tier:'P1P2', outQ:5, in:[[2399,40],[2400,40]]},
+  {id:2312, name:'超张力塑料', tier:'P1P2', outQ:5, in:[[3683,40],[3779,40]]},
+  {id:2317, name:'氧化物', tier:'P1P2', outQ:5, in:[[2392,40],[3683,40]]},
+  {id:2319, name:'培养基', tier:'P1P2', outQ:5, in:[[2393,40],[3645,40]]},
+  {id:2321, name:'聚芳酰胺', tier:'P1P2', outQ:5, in:[[2397,40],[2392,40]]},
+  {id:2327, name:'微纤维护盾', tier:'P1P2', outQ:5, in:[[2397,40],[9828,40]]},
+  {id:2328, name:'水冷CPU', tier:'P1P2', outQ:5, in:[[3645,40],[2398,40]]},
+  {id:2329, name:'生物电池', tier:'P1P2', outQ:5, in:[[2399,40],[2396,40]]},
+  {id:2463, name:'纳米体', tier:'P1P2', outQ:5, in:[[2393,40],[2398,40]]},
+  {id:3689, name:'机械元件', tier:'P1P2', outQ:5, in:[[2399,40],[2398,40]]},
+  {id:3691, name:'合成油', tier:'P1P2', outQ:5, in:[[2390,40],[3683,40]]},
+  {id:3693, name:'肥料', tier:'P1P2', outQ:5, in:[[2393,40],[2395,40]]},
+  {id:3695, name:'合成纺织品', tier:'P1P2', outQ:5, in:[[2397,40],[2396,40]]},
+  {id:3697, name:'硅酸盐玻璃', tier:'P1P2', outQ:5, in:[[2392,40],[9828,40]]},
+  {id:3725, name:'家畜', tier:'P1P2', outQ:5, in:[[2396,40],[2395,40]]},
+  {id:3775, name:'病原体', tier:'P1P2', outQ:5, in:[[2393,40],[3779,40]]},
+  {id:3828, name:'建筑模块', tier:'P1P2', outQ:5, in:[[2400,40],[2398,40]]},
+  {id:9830, name:'火箭燃料', tier:'P1P2', outQ:5, in:[[2390,40],[2389,40]]},
+  {id:9832, name:'冷却剂', tier:'P1P2', outQ:5, in:[[2390,40],[3645,40]]},
+  {id:9836, name:'消费级电器', tier:'P1P2', outQ:5, in:[[2401,40],[2400,40]]},
+  {id:9838, name:'超导体', tier:'P1P2', outQ:5, in:[[3645,40],[2389,40]]},
+  {id:9840, name:'传信器', tier:'P1P2', outQ:5, in:[[2401,40],[2389,40]]},
+  {id:9842, name:'微型电子元件', tier:'P1P2', outQ:5, in:[[2401,40],[9828,40]]},
+  {id:15317, name:'基因肉制品', tier:'P1P2', outQ:5, in:[[3779,40],[2395,40]]},
+  {id:2344, name:'凝缩液', tier:'P2P3', outQ:3, in:[[2317,10],[9832,10]]},
+  {id:2345, name:'监控无人机', tier:'P2P3', outQ:3, in:[[3697,10],[9830,10]]},
+  {id:2346, name:'合成神经键', tier:'P2P3', outQ:3, in:[[2319,10],[2312,10]]},
+  {id:2348, name:'凝胶基质生物胶', tier:'P2P3', outQ:3, in:[[2317,10],[2329,10],[9838,10]]},
+  {id:2349, name:'超级计算机', tier:'P2P3', outQ:3, in:[[9836,10],[2328,10],[9832,10]]},
+  {id:2351, name:'灵巧单元建筑模块', tier:'P2P3', outQ:3, in:[[9842,10],[3828,10]]},
+  {id:2352, name:'核反应堆', tier:'P2P3', outQ:3, in:[[2327,10],[44,10]]},
+  {id:2354, name:'控制面板', tier:'P2P3', outQ:3, in:[[3697,10],[2329,10]]},
+  {id:2358, name:'生物技术研究报告', tier:'P2P3', outQ:3, in:[[2463,10],[3725,10],[3828,10]]},
+  {id:2360, name:'工业炸药', tier:'P2P3', outQ:3, in:[[3695,10],[3693,10]]},
+  {id:2361, name:'密封薄膜', tier:'P2P3', outQ:3, in:[[15317,10],[2321,10]]},
+  {id:2366, name:'危险物探测系统', tier:'P2P3', outQ:3, in:[[3775,10],[3695,10],[9840,10]]},
+  {id:2367, name:'冷冻保存防腐剂', tier:'P2P3', outQ:3, in:[[2319,10],[3691,10],[3693,10]]},
+  {id:9834, name:'制导系统', tier:'P2P3', outQ:3, in:[[2328,10],[9840,10]]},
+  {id:9846, name:'大气内穿梭机', tier:'P2P3', outQ:3, in:[[3689,10],[9842,10],[2312,10]]},
+  {id:9848, name:'机器人技术', tier:'P2P3', outQ:3, in:[[9836,10],[3689,10]]},
+  {id:12836, name:'透颅微控器', tier:'P2P3', outQ:3, in:[[2463,10],[2329,10]]},
+  {id:17136, name:'乌克米超导体', tier:'P2P3', outQ:3, in:[[3691,10],[9838,10]]},
+  {id:17392, name:'数据芯片', tier:'P2P3', outQ:3, in:[[2327,10],[2312,10]]},
+  {id:17898, name:'高科技传信器', tier:'P2P3', outQ:3, in:[[2321,10],[9840,10]]},
+  {id:28974, name:'疫苗', tier:'P2P3', outQ:3, in:[[3775,10],[3725,10]]},
+  {id:2867, name:'广播节点', tier:'P3P4', outQ:1, in:[[17898,6],[17392,6],[2354,6]]},
+  {id:2868, name:'反破损快速反应无人机', tier:'P3P4', outQ:1, in:[[2366,6],[9846,6],[2348,6]]},
+  {id:2869, name:'纳米-工厂', tier:'P3P4', outQ:1, in:[[2360,6],[2398,40],[17136,6]]},
+  {id:2870, name:'有机砂浆喷注器', tier:'P3P4', outQ:1, in:[[9848,6],[2393,40],[2344,6]]},
+  {id:2871, name:'递推计算模块', tier:'P3P4', outQ:1, in:[[12836,6],[9834,6],[2346,6]]},
+  {id:2872, name:'自协调能源核心', tier:'P3P4', outQ:1, in:[[2345,6],[2352,6],[2361,6]]},
+  {id:2875, name:'无菌管道', tier:'P3P4', outQ:1, in:[[3645,40],[28974,6],[2351,6]]},
+  {id:2876, name:'湿件主机', tier:'P3P4', outQ:1, in:[[2349,6],[2358,6],[2367,6]]},
+];
+
+/* ================= 模板生成 ================= */
+const SUB_LABEL={full:'全直连',hub:'枢纽成对',semistar:'半星型',serial:'串联式'};
+function polar(la0,lo0,rho,th){ return {la:la0+rho*Math.cos(th), lo:lo0+rho*Math.sin(th)}; }
+function layoutSubOf(cfg){ return cfg.layoutSub||(cfg.layout==='star'?'full':'serial'); }
+/* 工厂环半径(弧度)：保证相邻厂间距 ≥ ml，且与中央簇(0.012)留 ml 净空 */
+function ringRho(cfg,N){
+  const mlR=0.012008578;
+  const rhoSpacing=N>1?mlR/(2*Math.sin(Math.PI/N)):mlR;
+  return Math.max(cfg.seg*mlR, rhoSpacing, 0.012+mlR);
+}
+function ringLenKm(cfg,N){ return ringRho(cfg,N)*cfg.radius; }
+function buildMiningTemplate(cfg){
+  const pl=PLANETS[cfg.pln]||PLANETS[2015];
+  const res=MINING_RES[cfg.resIdx]||MINING_RES[11];
+  const sub=layoutSubOf(cfg);
+  const pins=[], links=[], routes=[];
+  const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:+la.toFixed(5), Lo:+lo.toFixed(5), S:s, T:t}); return pins.length; };
+  const la0=1.5708, lo0=1.0;
+  const lp=[],stor=[],ecu=[],fact=[];
+  const maxFlow=Math.max(cfg.nFact*144000, cfg.yield);
+  const QECU=Math.round(maxFlow/Math.max(cfg.nEcu,1));
+  const RHO=ringRho(cfg,cfg.nFact);                       // 工厂环半径（ml 间距自适应）
+
+  if(sub==='full'){
+    // 中央簇：仓库居中，发射台东(0°)、ECU 西(180°)，镜像对称；工厂环均匀分布
+    if(cfg.nStor===1) stor.push(addPin(la0,lo0,null,pl.stor));
+    else for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/cfg.nStor); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
+    for(let i=0;i<cfg.nLpad;i++){ const p=polar(la0,lo0,0.012, i*0.7); lp.push(addPin(p.la,p.lo,null,pl.lp)); }
+    for(let i=0;i<cfg.nEcu;i++){ const p=polar(la0,lo0,0.012, Math.PI + i*0.7); ecu.push(addPin(p.la,p.lo,res.p0,pl.ecu,10)); }
+    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,RHO, Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,res.p1,pl.basic)); }
+    for(let i=0;i<ecu.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) links.push({D:s,Lv:0,S:ecu[i]}); }
+    for(let i=0;i<fact.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) links.push({D:fact[i],Lv:0,S:s}); links.push({D:lp[i%Math.max(lp.length,1)],Lv:0,S:fact[i]}); }
+    for(let i=0;i<ecu.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) routes.push({P:[ecu[i],s], Q:QECU, T:res.p0}); }
+    for(let i=0;i<fact.length;i++){ const s=stor[i%Math.max(stor.length,1)]; if(s) routes.push({P:[s,fact[i]], Q:3000, T:res.p0}); routes.push({P:[fact[i],lp[i%Math.max(lp.length,1)]], Q:20, T:res.p1}); }
+  }else if(sub==='semistar'){
+    const hub=[]; // 仓库（无则用发射台）
+    if(cfg.nStor===1) stor.push(addPin(la0,lo0,null,pl.stor));
+    else for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/cfg.nStor); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
+    for(let i=0;i<cfg.nLpad;i++){ const p=polar(la0,lo0,0.012, i*0.7); lp.push(addPin(p.la,p.lo,null,pl.lp)); }
+    for(let i=0;i<cfg.nEcu;i++){ const p=polar(la0,lo0,0.012, Math.PI + i*0.7); ecu.push(addPin(p.la,p.lo,res.p0,pl.ecu,10)); }
+    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,RHO, Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,res.p1,pl.basic)); }
+    hub.push(...(stor.length?stor:lp));
+    for(let i=0;i<ecu.length;i++){ const h=hub[i%hub.length]; if(h) links.push({D:h,Lv:0,S:ecu[i]}); }
+    for(const s of stor){ for(const l of lp){ links.push({D:l,Lv:0,S:s}); } }
+    for(let i=0;i<fact.length;i++){ const h=hub[i%hub.length]; if(h) links.push({D:fact[i],Lv:0,S:h}); }
+    for(let i=0;i<ecu.length;i++){ const h=hub[i%hub.length]; if(h) routes.push({P:[ecu[i],h], Q:QECU, T:res.p0}); }
+    for(let i=0;i<fact.length;i++){ const h=hub[i%hub.length], l=lp[i%Math.max(lp.length,1)]; if(h) routes.push({P:[h,fact[i]], Q:3000, T:res.p0}); if(h&&l) routes.push({P:[fact[i],h,l], Q:20, T:res.p1}); }
+  }else if(sub==='hub'){
+    // 仓库枢纽 + 工厂成对（国际服式）；环形(星型)或线性(链式)
+    const line=cfg.layout==='chain';
+    const hub=[];
+    if(line){
+      let cur=lo0-0.026;
+      for(let i=0;i<cfg.nEcu;i++) ecu.push(addPin(la0,cur,res.p0,pl.ecu,10)), cur+=0.013;
+      for(let i=0;i<cfg.nStor;i++) stor.push(addPin(la0,cur,null,pl.stor)), cur+=0.013;
+      for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=0.013;
+      const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
+      for(let k=0;k<P;k++){ fact.push(addPin(la0,cur,res.p1,pl.basic)); cur+=0.013; if(k<S){ fact.push(addPin(la0,cur,res.p1,pl.basic)); cur+=0.013; } }
+    }else{
+      if(cfg.nStor===1) stor.push(addPin(la0,lo0,null,pl.stor));
+      else for(let i=0;i<cfg.nStor;i++){ const p=polar(la0,lo0,0.012, i*2*Math.PI/cfg.nStor); stor.push(addPin(p.la,p.lo,null,pl.stor)); }
+      for(let i=0;i<cfg.nLpad;i++){ const p=polar(la0,lo0,0.012, i*0.7); lp.push(addPin(p.la,p.lo,null,pl.lp)); }
+      for(let i=0;i<cfg.nEcu;i++){ const p=polar(la0,lo0,0.012, Math.PI + i*0.7); ecu.push(addPin(p.la,p.lo,res.p0,pl.ecu,10)); }
+      const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
+      const rhoP=ringRho(cfg,P);
+      for(let k=0;k<P;k++){
+        const th=Math.PI/2 + 2*Math.PI*k/Math.max(P,1);
+        const p=polar(la0,lo0,rhoP,th); fact.push(addPin(p.la,p.lo,res.p1,pl.basic));
+        if(k<S){ const q=polar(la0,lo0,rhoP+0.012008578,th); fact.push(addPin(q.la,q.lo,res.p1,pl.basic)); }
+      }
+    }
+    hub.push(...(stor.length?stor:lp));
+    for(let i=0;i<ecu.length;i++){ const h=hub[i%hub.length]; if(h) links.push({D:h,Lv:0,S:ecu[i]}); }
+    for(const s of stor){ for(const l of lp){ links.push({D:s,Lv:0,S:l}); } }
+    const P=Math.ceil(cfg.nFact/2), S=Math.floor(cfg.nFact/2);
+    for(let k=0;k<P;k++){ const h=hub[k%hub.length]; if(h&&fact[2*k]) links.push({D:fact[2*k],Lv:0,S:h}); if(k<S&&fact[2*k+1]) links.push({D:fact[2*k+1],Lv:0,S:fact[2*k]}); }
+    for(let i=0;i<ecu.length;i++){ const h=hub[i%hub.length]; if(h) routes.push({P:[ecu[i],h], Q:QECU, T:res.p0}); }
+    for(let k=0;k<P;k++){ const h=hub[k%hub.length]; if(h&&fact[2*k]) routes.push({P:[h,fact[2*k]], Q:3000, T:res.p0}); if(h&&fact[2*k+1]) routes.push({P:[h,fact[2*k],fact[2*k+1]], Q:3000, T:res.p0}); }
+    for(let k=0;k<P;k++){ const h=hub[k%hub.length], l=lp[k%Math.max(lp.length,1)];
+      if(h&&l&&fact[2*k]) routes.push({P:[fact[2*k],h,l], Q:20, T:res.p1});
+      if(h&&l&&fact[2*k+1]) routes.push({P:[fact[2*k+1],fact[2*k],h,l], Q:20, T:res.p1}); }
+  }else{ // serial 串联式
+    const step=0.013; let cur=lo0;
+    for(let i=0;i<cfg.nEcu;i++) ecu.push(addPin(la0,cur,res.p0,pl.ecu,10)), cur+=step;
+    for(let i=0;i<cfg.nStor;i++) stor.push(addPin(la0,cur,null,pl.stor)), cur+=step;
+    for(let i=0;i<cfg.nFact;i++) fact.push(addPin(la0,cur,res.p1,pl.basic)), cur+=step;
+    for(let i=0;i<cfg.nLpad;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=step;
+    const st0=stor[0], ec0=ecu[0], lp0=lp[0];
+    if(ec0&&st0) links.push({D:st0,Lv:0,S:ec0});
+    if(st0&&fact.length) links.push({D:fact[0],Lv:0,S:st0});
+    for(let i=0;i<fact.length-1;i++) links.push({D:fact[i+1],Lv:0,S:fact[i]});
+    if(fact.length&&lp0) links.push({D:lp0,Lv:0,S:fact[fact.length-1]});
+    if(ec0&&st0) routes.push({P:[ec0,st0], Q:QECU, T:res.p0});
+    for(let i=0;i<fact.length;i++){ if(st0) routes.push({P:[st0].concat(fact.slice(0,i+1)), Q:3000, T:res.p0}); }
+    for(let i=0;i<fact.length;i++){ if(lp0) routes.push({P:[fact[i]].concat(fact.slice(i+1)).concat([lp0]), Q:20, T:res.p1}); }
+  }
+  return {CmdCtrLv:cfg.ccu,
+          Cmt:`矿点 ${res.p0n}-${res.p1n} ${cfg.nFact}厂 ${pl.name}${SUB_LABEL[sub]}`,
+          Diam:2*cfg.radius, L:links, P:pins, Pln:cfg.pln, R:routes};
+}
+function buildFactoryTemplate(cfg){
+  const pl=PLANETS[2016];
+  const prod=PRODUCTS.find(p=>p.id===cfg.prodId)||PRODUCTS[0];
+  const struct=prod.tier==='P3P4'?pl.ht:pl.adv;
+  const sub=layoutSubOf(cfg);
+  const pins=[], links=[], routes=[];
+  const addPin=(la,lo,s,t,h)=>{ pins.push({H:h||0, La:+la.toFixed(5), Lo:+lo.toFixed(5), S:s, T:t}); return pins.length; };
+  const la0=1.5708, lo0=1.0;
+  const lp=[],fact=[];
+  const L=factoryL(cfg);                       // 效率=1 台；长维护=每输入类型 1 台
+  const isLine=(cfg.layout==='chain'||sub==='serial');
+  // 发射台
+  if(isLine){
+    let cur=lo0-0.02;
+    for(let i=0;i<L;i++) lp.push(addPin(la0,cur,null,pl.lp)), cur+=0.012;
+  }else{
+    for(let i=0;i<L;i++){ const p=polar(la0,lo0,0.012, Math.PI/2 + 2*Math.PI*i/Math.max(L,1)); lp.push(addPin(p.la,p.lo,null,pl.lp)); }
+  }
+  // 工厂：环形（非串行）或线性
+  if(isLine){
+    const step=0.013; let cur=lo0+0.03;
+    for(let i=0;i<cfg.nFact;i++) fact.push(addPin(la0,cur,prod.id,struct)), cur+=step;
+  }else{
+    const rho=ringRho(cfg,cfg.nFact);
+    for(let i=0;i<cfg.nFact;i++){ const p=polar(la0,lo0,rho, Math.PI/2 + 2*Math.PI*i/Math.max(cfg.nFact,1)); fact.push(addPin(p.la,p.lo,prod.id,struct)); }
+  }
+  // 链路：每厂 ↔ 每台（一条双向：输入进厂 + 输出出厂）
+  for(const f of fact) for(const l of lp) links.push({S:l,D:f,Lv:0});
+  // 输入路由：输入类型 i 由 发射台 (i % L) 供给全部厂
+  for(let i=0;i<prod.in.length;i++){
+    const [inId,inQ]=prod.in[i];
+    const src=lp[i%Math.max(L,1)];
+    for(const f of fact) routes.push({P:[src,f],Q:inQ,T:inId});
+  }
+  // 输出路由：每厂 → 全部发射台（Q 均分 outQ，余数给前几台）
+  const base=Math.floor(prod.outQ/L), rem=prod.outQ%L;
+  for(const f of fact){
+    for(let k=0;k<L;k++){ const q=base+(k<rem?1:0); if(q>0) routes.push({P:[f,lp[k]],Q:q,T:prod.id}); }
+  }
+  return {CmdCtrLv:cfg.ccu,
+          Cmt:`工厂 ${prod.name} ${cfg.nFact}厂 ${cfg.fMode==='long'?'长维护':'效率'}`,
+          Diam:2*cfg.radius, L:links, P:pins, Pln:2016, R:routes};
+}
+/* 游戏格式序列化：字段顺序、冒号/逗号后空格、浮点带 .0，与游戏导出模板逐字节一致 */
+const TOP_ORDER=['CmdCtrLv','Cmt','Diam','L','P','Pln','R'];
+const OBJ_ORDERS={L:['D','Lv','S'], P:['H','La','Lo','S','T'], R:['P','Q','T']};
+const FLOAT_KEYS={Diam:1,La:1,Lo:1};
+function jnum(n,fl){
+  if(typeof n!=='number') return String(n);
+  if(fl) return Number.isInteger(n)?n.toFixed(1):String(n);
+  return String(n);
+}
+function jval(v,key){
+  if(v===null) return 'null';
+  if(Array.isArray(v)) return '['+v.map(x=>jval(x)).join(', ')+']';
+  if(typeof v==='object'){
+    const order=OBJ_ORDERS[key]||Object.keys(v);
+    return '{'+order.filter(k=>v[k]!==undefined).map(k=>`"${k}": ${jval(v[k],k)}`).join(', ')+'}';
+  }
+  if(typeof v==='number') return jnum(v,!!FLOAT_KEYS[key]);
+  return JSON.stringify(String(v));
+}
+function serializeGame(tpl){
+  const o={}; for(const k of TOP_ORDER) o[k]=tpl[k];
+  return jval(o);
+}
+function exportJSON(){
+  const cfg=readCfg();
+  const tpl=cfg.mode==='mining'?buildMiningTemplate(cfg):buildFactoryTemplate(cfg);
+  const json=serializeGame(tpl);
+  const blob=new Blob([json],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=(tpl.Cmt||'pi_template').replace(/[\\/:*?"<>|\s]+/g,'_')+'.json';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
+}
+function copyJSON(){
+  const cfg=readCfg();
+  const tpl=cfg.mode==='mining'?buildMiningTemplate(cfg):buildFactoryTemplate(cfg);
+  const json=serializeGame(tpl);
+  const done=()=>{ const b=$id('btnCopy'); const old=b.textContent; b.textContent='已复制 ✓'; setTimeout(()=>{ b.textContent=old; }, 1500); };
+  const fallback=()=>{
+    const ta=document.createElement('textarea');
+    ta.value=json; document.body.appendChild(ta); ta.select();
+    try{ document.execCommand('copy'); done(); }catch(e){ alert('复制失败，请从下方预览手动复制：'+e.message); }
+    ta.remove();
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(json).then(done).catch(fallback);
+  }else fallback();
+}
+function populateMiningRes(){
+  const sel=$id('miningRes');
+  sel.innerHTML=MINING_RES.map((r,i)=>`<option value="${i}"${i===11?' selected':''}>${r.p0n}(P0) → ${r.p1n}(P1)</option>`).join('');
+}
+function populateFactoryProd(){
+  const sel=$id('factoryProd');
+  const tier=$id('tier').value;
+  const cur=parseInt(sel.value,10);
+  const list=PRODUCTS.filter(p=>p.tier===tier);
+  sel.innerHTML=list.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  sel.value=list.some(p=>p.id===cur)?cur:(list[0]?list[0].id:'');
+}
+
+/* ================= 工具 ================= */
+function $id(x){ return document.getElementById(x); }
+function num(id, def){ const v=parseFloat($id(id).value); return isNaN(v)?def:v; }
+function int(id, def){ const v=parseInt($id(id).value,10); return isNaN(v)?def:v; }
+function fmt(x){ return Math.round(x).toLocaleString('zh-CN'); }
+function fmt1(x){ return (Math.round(x*10)/10).toLocaleString('zh-CN'); }
+function readCfg(){
+  return {
+    ccu:int('ccu',5),
+    mode:$id('mode').value,
+    tier:$id('tier').value,
+    fMode:$id('fMode').value,
+    nFact:int('nFact',8),
+    nStor:int('nStor',1),
+    nLpad:int('nLpad',1),
+    nEcu:int('nEcu',1),
+    nHead:int('nHead',10),
+    yield:num('yield',1150000),
+    radius:num('radius',5000),
+    pln:int('pln',2015),
+    resIdx:int('miningRes',11),
+    prodId:int('factoryProd',2329),
+    layout:$id('layout').value,
+    layoutSub:$id('layoutSub').value,
+    seg:($id('segAuto').checked)?($id('layout').value==='star'?1.5:1.0):num('seg',1.5),
+    ver:getVersion(),
+    upgEcu:int('upgEcu',0),
+    upgTrunk:int('upgTrunk',0),
+    upgOther:int('upgOther',0),
+    vP0:num('vP0',0.005), vP1:num('vP1',0.19), vP2:num('vP2',0.75),
+    vP3:num('vP3',6),     vP4:num('vP4',50),
+  };
+}
+function suggestLevel(ver, reqM3){
+  for(let i=0;i<ver.levels.length;i++) if(ver.levels[i].cap>=reqM3) return i;
+  return ver.levels.length-1;
+}
+/* ===== 工厂：发射台数量与免维护天数 ===== */
+function factoryL(cfg){
+  // 效率=1 台；长维护=每输入类型 1 台
+  if(cfg.mode!=='factory') return cfg.nLpad;
+  if(cfg.fMode!=='long') return 1;
+  const prod=PRODUCTS.find(p=>p.id===cfg.prodId);
+  return prod&&prod.in.length>0? prod.in.length : 1;
+}
+/* 每输入类型：每厂每日消耗 m³（q×24×体积），输出总 m³/天 */
+function inputTypesM3(cfg){
+  const t=TIERS[cfg.tier];
+  const prod=PRODUCTS.find(p=>p.id===cfg.prodId)||PRODUCTS[0];
+  const arr=(prod.in||[]).map(([id,q])=>({id:id, q:q, m3day:q*24*cfg[t.inV]}));
+  if(arr.length===0) arr.push({id:0, q:t.in, m3day:t.in*cfg[t.inV]});
+  return {types:arr, inTotal:arr.reduce((s,x)=>s+x.m3day,0), outM3:t.out*cfg[t.outV]};
+}
+/* 免维护天数 X：所有发射台满时，最紧的输入类型能撑的天数 */
+function maintainDays(cfg){
+  if(cfg.mode!=='factory'||cfg.nFact<=0) return 0;
+  const {types,inTotal,outM3}=inputTypesM3(cfg);
+  const L=factoryL(cfg);
+  if(cfg.fMode==='eff') return (L*10000)/(cfg.nFact*inTotal);
+  let x=Infinity;
+  for(const ty of types){ if(ty.m3day>0) x=Math.min(x, L*10000/(cfg.nFact*ty.m3day)); }
+  return x===Infinity?0:x;
+}
+
+/* ================= 链路组 ================= */
+function buildLinkGroups(cfg){
+  const g=[];
+  const sub=layoutSubOf(cfg);
+  const isHub=(sub==='hub'), isSemi=(sub==='semistar'), isFull=(sub==='full'), isSerial=(sub==='serial');
+  if(cfg.mode==='mining'){
+    const demand=cfg.nFact*MINING_IN;
+    const linkFlow=cfg.nEcu?Math.max(demand,cfg.yield)/cfg.nEcu:0;
+    g.push({name:'ECU→仓库', count:cfg.nEcu, flowUnits:linkFlow, vol:cfg.vP0, level:'upgEcu'});
+    if(isFull){
+      g.push({name:'仓库→工厂', count:cfg.nFact, flowUnits:MINING_IN, vol:cfg.vP0, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+      g.push({name:'工厂→发射台', count:cfg.nFact, flowUnits:MINING_OUT, vol:cfg.vP1, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+    }else if(isSemi){
+      g.push({name:'仓库→工厂(P0)', count:cfg.nFact, flowUnits:MINING_IN, vol:cfg.vP0, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+      g.push({name:'仓库→发射台(P1)', count:1, flowUnits:cfg.nFact*MINING_OUT, vol:cfg.vP1, level:'upgTrunk'});
+    }else if(isHub){
+      g.push({name:'仓库→发射台(P1)', count:1, flowUnits:cfg.nFact*MINING_OUT, vol:cfg.vP1, level:'upgTrunk'});
+      if(cfg.nFact>0) g.push({name:'仓库→主干厂', count:Math.ceil(cfg.nFact/2), flowUnits:2*MINING_IN, vol:cfg.vP0, level:'upgTrunk', len:ringLenKm(cfg,Math.ceil(cfg.nFact/2))});
+      if(cfg.nFact>1) g.push({name:'主干→支线厂', count:Math.floor(cfg.nFact/2), flowUnits:MINING_IN, vol:cfg.vP0, level:'upgOther', len:0.012008578*cfg.radius});
+    }else{ // serial
+      g.push({name:'仓库→f1（干路）', count:1, flowUnits:demand, vol:cfg.vP0, level:'upgTrunk'});
+      if(cfg.nFact>1) g.push({name:'链内中继 f_i→f_i+1', count:cfg.nFact-1, flowUnits:(cfg.nFact-1)*MINING_IN, vol:cfg.vP0, level:'upgTrunk'});
+      g.push({name:'末厂→发射台', count:1, flowUnits:cfg.nFact*MINING_OUT, vol:cfg.vP1, level:'upgTrunk'});
+    }
+  }else{
+    // 工厂：L 个发射台（效率=1 / 长维护=每输入类型1台），每厂连全部台
+    const L=factoryL(cfg);
+    const {types,outM3}=inputTypesM3(cfg);
+    const perH=types.map(ty=>ty.m3day/24);       // 每厂每输入类型 m³/h
+    const inTotH=perH.reduce((a,b)=>a+b,0);      // 每厂全部输入 m³/h
+    const outH=outM3/24;                         // 每厂输出 m³/h
+    // 效率=单台独扛全部输入+输出；长维护=每台只扛一类输入+均分输出
+    const req=cfg.fMode==='eff'? inTotH+outH : Math.max.apply(null,perH)+outH/Math.max(L,1);
+    const isLine=(cfg.layout==='chain'||sub==='serial');
+    if(isLine){
+      // 串联/线性：发射台簇在 lo0-0.02(+0.012×L)，工厂自 lo0+0.03 起每 0.013 一个——
+      // 每条链路真实长度随厂号增长，逐厂行计费（与 buildFactoryTemplate 摆放坐标一致）
+      const padCenter=0.012*(L-1)/2;             // 发射台簇中心相对 lo0-0.02 的偏移(rad)
+      for(let i=0;i<cfg.nFact;i++){
+        const dLo=0.05 + 0.013*i - padCenter;    // 台簇中心→厂 i 的经度差(rad)
+        g.push({name:`厂${i+1}↔L台`, count:L, reqM3:req, level:'upgOther', len:dLo*cfg.radius});
+      }
+    }else{
+      g.push({name:'工厂↔发射台(供料)', count:cfg.nFact*L, reqM3:req, level:'upgOther', len:ringLenKm(cfg,cfg.nFact)});
+    }
+  }
+  return g;
+}
+
+/* ================= 核算 ================= */
+function evaluate(cfg, autoUpg){
+  const ver=cfg.ver;
+  const budget=CCU_BUDGET[cfg.ccu];
+  const ml=0.012008578*cfg.radius;
+  const len=ml*cfg.seg;
+  const build={cpu:15+0.2*len, pg:10+0.15*len};
+
+  const structs=[]; let sCpu=0, sPg=0;
+  const add=(k,n)=>{ if(n<=0) return; const st=STRUCT[k]; structs.push({name:`${st.name} ×${n}`, cpu:st.cpu*n, pg:st.pg*n}); sCpu+=st.cpu*n; sPg+=st.pg*n; };
+  if(cfg.mode==='mining'){
+    add('basic',cfg.nFact); add('ecu',cfg.nEcu); add('head',cfg.nEcu*cfg.nHead);
+    add('storage',cfg.nStor); add('launchpad',cfg.nLpad);
+  }else{
+    add(TIERS[cfg.tier].fact,cfg.nFact);
+    add('launchpad',factoryL(cfg));
+  }
+
+  const groups=buildLinkGroups(cfg);
+  let lCpu=0, lPg=0, uCpu=0, uPg=0;
+  const rows=[];
+  for(const gr of groups){
+    const len=gr.len!=null?gr.len:ml*cfg.seg;
+    const bCpu=15+0.2*len, bPg=10+0.15*len;
+    const req=gr.reqM3!=null?gr.reqM3:gr.flowUnits*gr.vol/24;
+    const suggest=suggestLevel(ver, req);
+    const lvl=autoUpg?suggest:cfg[gr.level];
+    const cap=ver.levels[lvl].cap;
+    const ok=req<=cap;
+    lCpu+=bCpu*gr.count; lPg+=bPg*gr.count;
+    uCpu+=ver.levels[lvl].cpu*gr.count; uPg+=ver.levels[lvl].pg*gr.count;
+    rows.push({name:gr.name, count:gr.count, flow:gr.flowUnits!=null?gr.flowUnits:Math.round(req*24/(gr.vol||1)), vol:gr.vol,
+               req:req, lvl:lvl, suggest:suggest, cap:cap, ok:ok, used:(req/cap*100),
+               len:Math.round(len), bCpu:bCpu, bPg:bPg, uCpu:ver.levels[lvl].cpu, uPg:ver.levels[lvl].pg});
+  }
+  const totCpu=sCpu+lCpu+uCpu, totPg=sPg+lPg+uPg;
+  return {
+    cfg, budget, structs, sCpu, sPg, lCpu, lPg, uCpu, uPg, rows,
+    totCpu, totPg, cpuLeft:budget.cpu-totCpu, pgLeft:budget.pg-totPg,
+    cpuOk:totCpu<=budget.cpu, pgOk:totPg<=budget.pg,
+  };
+}
+
+/* ================= 渲染 ================= */
+function populateLayoutSub(){
+  const sel=$id('layoutSub');
+  const L=$id('layout').value;
+  const cur=sel.value||'';
+  const opts = L==='star'
+    ? [['full','全直连（国服式）'],['hub','枢纽成对（国际服式）'],['semistar','半星型']]
+    : [['serial','串联式（旧）'],['hub','枢纽式（国际）']];
+  sel.innerHTML=opts.map(([v,label])=>`<option value="${v}">${label}</option>`).join('');
+  sel.value=opts.some(o=>o[0]===cur)?cur:opts[0][0];
+  const hints={
+    full:'全直连：每厂独立直连仓库+发射台，链路多（2N+1）、最鲁棒',
+    hub:'枢纽成对：仓库为枢纽、工厂成对挂接，链路少（N+2）、每条≤2厂负载、通常免升级',
+    semistar:'半星型：每厂直连仓库（P0），P1 经仓库→发射台，链路 N+2',
+    serial:'串联式：工厂一线接力、多跳路由，仓库→f1 承载全部流量、高产量需升级',
+  };
+  $id('layoutHint').textContent=hints[sel.value]||'';
+}
+function update(){
+  // seg 自动估算时，把输入框同步为当前生效值
+  if($id('segAuto').checked){
+    const auto=$id('layout').value==='star'?1.5:1.0;
+    if(parseFloat($id('seg').value)!==auto) $id('seg').value=auto;
+  }
+  populateLayoutSub();
+  let cfg=readCfg();
+  // 工厂数自动适配：开关开时，N 始终=该配置结构可行最大值（D>1 时含缓冲仓库）
+  if($id('nAuto').checked){
+    const maxN=maxFeasibleN(cfg);
+    if(maxN>=0 && cfg.nFact!==maxN){
+      $id('nFact').value=maxN;
+      cfg=readCfg();
+    }
+  }
+  $id('nFact').disabled=$id('nAuto').checked;
+  const ver=cfg.ver;
+  populateFactoryProd();
+  // 升级等级下拉上限
+  for(const id of ['upgEcu','upgTrunk','upgOther']) syncUpgOptions(id, ver.levels.length-1);
+  const r=evaluate(cfg,false);
+  renderSummary(r);
+  renderStatus(r);
+  renderLinks(r, cfg);
+  renderSupply(r, cfg);
+  renderFactory(cfg);
+  renderBuffer(cfg);
+  renderMaxN(cfg);
+  renderExport(cfg);
+  showHide(cfg);
+}
+function syncUpgOptions(id, maxL){
+  const sel=$id(id); const cur=parseInt(sel.value,10);
+  const want=Array.from({length:maxL+1},(_,i)=>`<option value="${i}"${i===cur?' selected':''}>${i}</option>`).join('');
+  if(sel.innerHTML!==want) sel.innerHTML=want;
+}
+function showHide(cfg){
+  $id('miningPanel').style.display=cfg.mode==='mining'?'':'none';
+  $id('miningHead').style.display=cfg.mode==='mining'?'':'none';
+  $id('tierRow').style.display=cfg.mode==='factory'?'':'none';
+  $id('prodRow').style.display=cfg.mode==='factory'?'':'none';
+  $id('fModeRow').style.display=cfg.mode==='factory'?'':'none';
+  $id('storRow').style.display=cfg.mode==='mining'?'':'none';
+  $id('lpadRow').style.display=cfg.mode==='mining'?'':'none';
+  $id('trunkRow').style.display=(cfg.mode==='mining'&&layoutSubOf(cfg)!=='full')?'':'none';
+  $id('mapRow').style.display=cfg.ver.id==='new'?'':'none';
+  $id('resSupplyHead').style.display=cfg.mode==='mining'?'':'none';
+  $id('resSupply').style.display=cfg.mode==='mining'?'':'none';
+  $id('resFactoryHead').style.display=cfg.mode==='factory'?'':'none';
+  $id('resFactory').style.display=cfg.mode==='factory'?'':'none';
+  $id('resBufHead').style.display=cfg.mode==='factory'?'':'none';
+  $id('resBuf').style.display=cfg.mode==='factory'?'':'none';
+}
+function statusTag(ok){
+  return ok?'<span class="tag tag-ok">✓ 满足</span>':'<span class="tag tag-bad">✗ 超限</span>';
+}
+function renderSummary(r){
+  let h='<tr><th class="l">项目</th><th>CPU</th><th>PG</th></tr>';
+  for(const s of r.structs) h+=`<tr><td class="l">${s.name}</td><td class="mono">${fmt(s.cpu)}</td><td class="mono">${fmt(s.pg)}</td></tr>`;
+  h+=`<tr><td class="l">链路建造（${r.rows.reduce((a,b)=>a+b.count,0)} 条）</td><td class="mono">${fmt(r.lCpu)}</td><td class="mono">${fmt(r.lPg)}</td></tr>`;
+  h+=`<tr><td class="l">链路升级</td><td class="mono">${fmt(r.uCpu)}</td><td class="mono">${fmt(r.uPg)}</td></tr>`;
+  h+=`<tr><td class="l big">合计</td><td class="mono big">${fmt(r.totCpu)}</td><td class="mono big">${fmt(r.totPg)}</td></tr>`;
+  h+=`<tr><td class="l">CCU${r.cfg.ccu} 预算</td><td class="mono">${fmt(r.budget.cpu)}</td><td class="mono">${fmt(r.budget.pg)}</td></tr>`;
+  h+=`<tr><td class="l">剩余</td><td class="mono ${r.cpuOk?'ok':'bad'}">${fmt(r.cpuLeft)}</td><td class="mono ${r.pgOk?'ok':'bad'}">${fmt(r.pgLeft)}</td></tr>`;
+  $id('resSummary').innerHTML=h;
+}
+function renderStatus(r){
+  const parts=[];
+  parts.push(`CPU ${statusTag(r.cpuOk)}`);
+  parts.push(`PG ${statusTag(r.pgOk)}`);
+  let msg='';
+  if(r.cpuOk&&r.pgOk) msg='<span class="ok">可容纳</span>';
+  else if(!r.cpuOk&&!r.pgOk) msg='<span class="bad">CPU 与 PG 双双超限</span>';
+  else if(!r.cpuOk) msg='<span class="bad">CPU 超限</span>';
+  else msg='<span class="bad">PG 超限</span>';
+  $id('resStatus').innerHTML=parts.join('　')+'　'+msg;
+}
+function renderLinks(r, cfg){
+  let h='<tr><th class="l">链路</th><th>条数</th><th>长度 km</th><th>单条建造+升级<br>CPU/PG</th><th>流量(单位/天)</th><th>所需 m³/h</th><th>容量 m³/h</th><th>建议级</th><th>已设级</th><th>占用</th><th>状态</th></tr>';
+  for(const x of r.rows){
+    const need=x.ok?'':'<span class="tag tag-warn">需升级</span>';
+    const lvlCls=x.ok?'':'class="warn"';
+    const cost=(x.bCpu!=null&&x.uCpu!=null)?`${Math.round(x.bCpu)}+${x.uCpu} / ${Math.round(x.bPg)}+${x.uPg}`:'—';
+    h+=`<tr><td class="l">${x.name}</td><td class="mono">${x.count}</td>
+      <td class="mono">${fmt(x.len)}</td><td class="mono">${cost}</td>
+      <td class="mono">${fmt(x.flow)}</td><td class="mono">${fmt1(x.req)}</td>
+      <td class="mono">${fmt(x.cap)}</td>
+      <td class="mono">${x.suggest}</td><td class="mono ${lvlCls}">${x.lvl}</td>
+      <td class="mono ${x.used>100?'bad':x.used>85?'warn':''}">${Math.round(x.used)}%</td>
+      <td>${x.ok?'':'<span class="tag tag-warn">瓶颈</span>'}</td></tr>`;
+  }
+  if(r.rows.length===0) h='<tr><td colspan="11" class="l">无链路（工厂数=0）</td></tr>';
+  $id('resLinks').innerHTML=h;
+}
+function renderSupply(r, cfg){
+  const demand=cfg.nFact*MINING_IN;
+  const y=cfg.yield;
+  const surplus=y-demand;
+  const storUnits=12000/cfg.vP0;                 // 单仓库可存 P0 单位
+  const lpUnits=10000/cfg.vP0;                   // 发射台可存 P0 单位
+  const totalStor=cfg.nStor*storUnits + cfg.nLpad*lpUnits;   // 仓库 + 发射台 缓冲合计
+  const drainDays= totalStor/demand;             // 断产时库存可维持天数
+  const fillDays= surplus>0? totalStor/surplus : Infinity;   // 满载需天数
+  const dieDays = surplus<0? totalStor/(-surplus) : Infinity; // 赤字下耗尽天数
+  let h=`<table><tr><th class="l">项目</th><th>数值</th></tr>`;
+  h+=`<tr><td class="l">工厂需求 P0/天（${cfg.nFact} 厂 × 144,000）</td><td class="mono">${fmt(demand)}</td></tr>`;
+  h+=`<tr><td class="l">估算产量 P0/天</td><td class="mono">${fmt(y)}</td></tr>`;
+  h+=`<tr><td class="l">日差额</td><td class="mono ${surplus>=0?'ok':'bad'}">${surplus>=0?'+':''}${fmt(surplus)}</td></tr>`;
+  h+=`<tr><td class="l">P0 缓冲容量（${cfg.nStor} 仓 + ${cfg.nLpad} 发射台）</td><td class="mono">${fmt(totalStor)} 单位</td></tr>`;
+  if(surplus>=0){
+    h+=`<tr><td class="l">供给状态</td><td><span class="tag tag-ok">充足，可 24h 运转</span></td></tr>`;
+    h+=`<tr><td class="l">断产后库存可维持</td><td class="mono">${fmt1(drainDays)} 天</td></tr>`;
+    if(surplus>0) h+=`<tr><td class="l">按富余速度满载需</td><td class="mono">${fmt1(fillDays)} 天</td></tr>`;
+  }else{
+    h+=`<tr><td class="l">供给状态</td><td><span class="tag tag-bad">产量不足，将间歇停产</span></td></tr>`;
+    h+=`<tr><td class="l">库存耗尽需（之后停产）</td><td class="mono">${fmt1(dieDays)} 天</td></tr>`;
+    h+=`<tr><td class="l">建议</td><td class="l">减少工厂数至 ≤ ${Math.floor(y/144000)} 可 24h 运转</td></tr>`;
+  }
+  h+=`<tr><td class="l" style="text-align:left;font-size:12px;color:#57606a;">注：发射台要装载 P1 产出，实际 P0 缓冲略低于上值；仓库为采集器→工厂缓冲。</td></tr>`;
+  h+=`</table>`;
+  $id('resSupply').innerHTML=h;
+}
+function renderFactory(cfg){
+  const t=TIERS[cfg.tier];
+  const inVol=cfg[t.inV], outVol=cfg[t.outV];
+  let h=`<table><tr><th class="l">项目</th><th>每厂/天</th><th>${cfg.nFact} 厂/天</th><th>体积</th></tr>`;
+  h+=`<tr><td class="l">输入 ${t.label}</td><td class="mono">${fmt(t.in)}</td><td class="mono">${fmt(t.in*cfg.nFact)}</td><td class="mono">${fmt1(inVol)} m³/单位 → ${fmt1(t.in*cfg.nFact*inVol)} m³</td></tr>`;
+  h+=`<tr><td class="l">输出</td><td class="mono">${fmt(t.out)}</td><td class="mono">${fmt(t.out*cfg.nFact)}</td><td class="mono">${fmt1(outVol)} m³/单位 → ${fmt1(t.out*cfg.nFact*outVol)} m³</td></tr>`;
+  h+=`<tr><td class="l" colspan="4" style="text-align:left;font-size:12px;color:#57606a;">${t.note}</td></tr>`;
+  h+=`</table>`;
+  $id('resFactory').innerHTML=h;
+}
+function renderBuffer(cfg){
+  const L=factoryL(cfg);
+  const {types,inTotal,outM3}=inputTypesM3(cfg);
+  const days=maintainDays(cfg);
+  const t=TIERS[cfg.tier];
+  const fmtD=x=> x<1? (Math.round(x*100)/100).toLocaleString('zh-CN') : fmt1(x);
+  const lpTxt=cfg.fMode==='long'?'长维护（每输入类型 1 发射台）':'效率（单发射台混装全部输入/输出）';
+  let h=`<table><tr><th class="l">项目</th><th>数值</th></tr>`;
+  h+=`<tr><td class="l">模式</td><td class="l">${lpTxt}（共 ${L} 台 × 10,000 m³）</td></tr>`;
+  for(let i=0;i<types.length;i++){
+    const ty=types[i];
+    h+=`<tr><td class="l">输入类型 ${i+1} 每厂日耗</td><td class="mono">${fmt(ty.q*24)} 单位 ≈ ${fmt1(ty.m3day)} m³</td></tr>`;
+  }
+  h+=`<tr><td class="l">${cfg.nFact} 厂合计输入消耗</td><td class="mono">${fmt1(inTotal*cfg.nFact)} m³/天</td></tr>`;
+  h+=`<tr><td class="l">${cfg.nFact} 厂合计输出产出</td><td class="mono">${fmt1(outM3*cfg.nFact)} m³/天</td></tr>`;
+  h+=`<tr><td class="l">发射台满仓可免维护（输入耗尽前）</td><td class="mono">${fmtD(days)} 天 ${days>=1?'<span class="tag tag-ok">可过夜/隔日收</span>':(days>0?'<span class="tag tag-warn">需频繁补料</span>':'<span class="tag tag-bad">无法自给</span>')}</td></tr>`;
+  h+=`<tr><td class="l" colspan="2" style="text-align:left;font-size:12px;color:#57606a;">注：发射台负责装卸（导入原料、导出成品），不建中转仓库。满仓 X 天后输入耗尽、工厂停产；届时上线补料即恢复满产。${cfg.fMode==='eff'?'效率模式单台混装，X 通常不到 1 天，适合勤上线玩家。':'长维护模式每类输入独占 1 台，X 明显拉长，适合隔天/数天上线的玩家。'}</td></tr>`;
+  h+=`</table>`;
+  $id('resBuf').innerHTML=h;
+}
+function maxFeasibleN(cfg){
+  let best=-1;
+  for(let N=0;N<=40;N++){
+    const c2={...cfg, nFact:N};
+    const r=evaluate(c2,true);
+    if(r.cpuOk&&r.pgOk) best=N; else break;
+  }
+  return best;
+}
+function renderMaxN(cfg){
+  const isMining=cfg.mode==='mining';
+  const rows=[];
+  for(let c=0;c<=5;c++){
+    const best=maxFeasibleN({...cfg, ccu:c});
+    const supply=isMining?Math.min(best, Math.floor(cfg.yield/144000)):best;
+    rows.push({ccu:c, max:best, supply});
+  }
+  let h=`<tr><th>CCU</th><th>预算 CPU</th><th>预算 PG</th><th>结构上限 N</th><th>${isMining?'供给上限（24h 运转）':'有效上限 N'}</th></tr>`;
+  for(const r of rows){
+    const b=CCU_BUDGET[r.ccu];
+    let eff;
+    if(r.max<0) eff='—';
+    else if(isMining) eff= r.supply===r.max ? String(r.max) : `${r.supply} <span class="hint">(结构可达 ${r.max})</span>`;
+    else eff=String(r.max);
+    h+=`<tr><td class="mono">${r.ccu}</td><td class="mono">${fmt(b.cpu)}</td><td class="mono">${fmt(b.pg)}</td>
+        <td class="mono">${r.max<0?'—':r.max}</td><td>${eff}</td></tr>`;
+  }
+  $id('resMaxN').innerHTML=h;
+}
+function renderExport(cfg){
+  let tpl;
+  try{
+    tpl=cfg.mode==='mining'?buildMiningTemplate(cfg):buildFactoryTemplate(cfg);
+    $id('resExport').textContent=serializeGame(tpl);
+  }catch(e){
+    $id('resExport').textContent='生成失败: '+e.message;
+  }
+}
+
+/* ================= 自检 ================= */
+function selfCheck(){
+  const lines=[];
+  const C=(ccu,cpu,pg,ctx)=>{ const b=CCU_BUDGET[ccu]; return {ok:b.cpu-cpu===ctx.cpu&&b.pg-pg===ctx.pg, got:{cpu:b.cpu-cpu,pg:b.pg-pg}}; };
+  // P4 x8 + 1 发射台：结构 12,400/3,900；CCU3 余 4,815/11,100
+  let cpu=8*1100+3600, pg=8*400+700;
+  lines.push(`P4×8+发射台 结构 = ${fmt(cpu)}/${fmt(pg)} (期望 12,400/3,900) ${cpu===12400&&pg===3900?'✓':'✗'}`);
+  let r=C(3,cpu,pg,{cpu:4815,pg:11100});
+  lines.push(`  CCU3 剩余 = ${fmt(r.got.cpu)}/${fmt(r.got.pg)} (期望 4,815/11,100) ${r.ok?'✓':'✗'}`);
+  // P2/P3 x12 + 1 发射台：9,600/9,100；CCU2 余 2,536/2,900
+  cpu=12*500+3600; pg=12*700+700;
+  lines.push(`P2/P3×12+发射台 = ${fmt(cpu)}/${fmt(pg)} (期望 9,600/9,100) ${cpu===9600&&pg===9100?'✓':'✗'}`);
+  r=C(2,cpu,pg,{cpu:2536,pg:2900});
+  lines.push(`  CCU2 剩余 = ${fmt(r.got.cpu)}/${fmt(r.got.pg)} (期望 2,536/2,900) ${r.ok?'✓':'✗'}`);
+  // LS 矿点 2ECU+4基础厂+1仓库+1发射台：5,700/9,800；CCU5 余 19,715/9,200
+  cpu=2*400+4*200+500+3600; pg=2*2600+4*800+700+700;
+  lines.push(`LS 矿点(2ECU+4厂+1仓+1台) = ${fmt(cpu)}/${fmt(pg)} (期望 5,700/9,800) ${cpu===5700&&pg===9800?'✓':'✗'}`);
+  r=C(5,cpu,pg,{cpu:19715,pg:9200});
+  lines.push(`  CCU5 剩余 = ${fmt(r.got.cpu)}/${fmt(r.got.pg)} (期望 19,715/9,200) ${r.ok?'✓':'✗'}`);
+  // 00 矿点 1ECU+8基础厂+1仓+1台：6,100/10,400
+  cpu=400+8*200+500+3600; pg=2600+8*800+700+700;
+  lines.push(`00 矿点(1ECU+8厂+1仓+1台) = ${fmt(cpu)}/${fmt(pg)} (期望 6,100/10,400) ${cpu===6100&&pg===10400?'✓':'✗'}`);
+  // 链路升级旧表映射（新版 floor）
+  const nl=buildNewLevels('floor');
+  const expect=[[1250,366,206],[2500,598,322],[5000,853,443],[10000,1130,570],[20000,1427,701],[40000,1740,836]];
+  lines.push('新版(floor) 映射：');
+  for(let i=0;i<nl.length;i++){ const e=expect[i]; const m=nl[i].cap===e[0]&&nl[i].cpu===e[1]&&nl[i].pg===e[2]; lines.push(`  L${i} ${fmt(nl[i].cap)}m³/h +${nl[i].cpu}/+${nl[i].pg} ${m?'✓':'✗'}`); }
+  // 虫洞场景：P0 0.005，2M/天 → 所需 416.7 m³/h；旧版需 L1(500)
+  const req=2000000*0.005/24;
+  lines.push(`虫洞 2M/天 P0 → 所需 ${fmt1(req)} m³/h；旧版建议等级 ${suggestLevel({levels:UPGRADE_OLD},req)}（期望 1，容量500）`);
+  lines.push(`普通 1.15M/天 P0 → 所需 ${fmt1(1150000*0.005/24)} m³/h；旧版建议等级 ${suggestLevel({levels:UPGRADE_OLD},1150000*0.005/24)}（期望 0，容量250）`);
+  // 供给：8 厂需求 1.152M
+  lines.push(`8 厂需求 = ${fmt(8*144000)} P0/天 (期望 1,152,000) ${8*144000===1152000?'✓':'✗'}`);
+  // 仓库 P0 容量
+  lines.push(`单仓库 P0 容量 = ${fmt(12000/0.005)} 单位 (期望 2,400,000) ${12000/0.005===2400000?'✓':'✗'}`);
+  lines.push(`发射台 P0 容量 = ${fmt(10000/0.005)} 单位 (期望 2,000,000) ${10000/0.005===2000000?'✓':'✗'}`);
+  lines.push(`1 仓+1 发射台 P0 缓冲 = ${fmt((12000+10000)/0.005)} 单位 (期望 4,400,000)`);
+  $id('resSelfcheck').textContent=lines.join('\n');
+}
+
+/* ================= 事件 ================= */
+const bindIds=['ccu','mode','tier','fMode','pln','miningRes','factoryProd','nFact','nAuto','nStor','nLpad','nEcu','nHead','yield','radius','layout','layoutSub','seg','segAuto','linkVer','mapMode','upgEcu','upgTrunk','upgOther','vP0','vP1','vP2','vP3','vP4'];
+for(const id of bindIds) $id(id).addEventListener('input',update);
+$id('btnExport').addEventListener('click',exportJSON);
+$id('btnCopy').addEventListener('click',copyJSON);
+window.addEventListener('DOMContentLoaded',()=>{ populateMiningRes(); populateLayoutSub(); update(); selfCheck(); });
+</script>
+</body>
+</html>
